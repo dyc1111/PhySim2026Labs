@@ -1,7 +1,5 @@
 import numpy as np
 
-MAX_BODIES = 128
-
 CUBE_LOCAL_VERTS_NP = np.array(
     [
         [-1.0, -1.0, -1.0],
