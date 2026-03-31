@@ -1,2 +1,5 @@
 vcx-sim-master/
 .vscode/
+*.ini
+outputs
+__pycache__

@@ -1,0 +1,27 @@
+scene:
+  dt: 0.0041666667
+  substeps: 2
+  steps: 400
+  gravity: [0.0, 0.0, 0.0]
+  linear_damping: 0
+  angular_damping: 0
+
+  default_size: [0.6, 0.6, 0.6]
+  default_mass: 1.0
+
+  objects:
+    - name: box0
+      size: [0.6, 0.4, 0.8]
+      position: [-1.0, 0.75, 0.2]
+      velocity: [0.1, 0.0, 0.0]
+      rotation_deg: [30.0, 0.0, 0.0]
+      angular_velocity: [0.0, 1.0, 0.0]
+      mass: 1.0
+
+    - name: box1
+      size: [0.5, 0.7, 0.3]
+      position: [1.0, 0.3, 0.0]
+      velocity: [-0.1, 0.0, 0.0]
+      rotation_deg: [0.0, 0.0, 0.0]
+      angular_velocity: [0.0, 1.2, 0.0]
+      mass: 1.0
