@@ -1,8 +1,8 @@
 scene:
   dt: 0.0041666667
   substeps: 4
-  steps: 400
-  gravity: [0.0, -9.8, 0.0]
+  steps: -1
+  gravity: [0.0, 0.0, 0.0]
   linear_damping: 0
   angular_damping: 0
 
@@ -10,8 +10,16 @@ scene:
     - type: cuboid
       size: [0.6, 0.4, 0.8]
       position: [-1.0, 0.75, 0.2]
-      velocity: [1.0, 0.0, 0.0]
-      rotation_deg: [30.0, 0.0, 0.0]
+      velocity: [0.0, 0.0, 0.0]
+      rotation_deg: [0.0, 0.0, 0.0]
       angular_velocity: [0.0, 1.0, 0.0]
       mass: 1.0
       color: [0.8, 0.2, 0.2]
+    - type: cuboid
+      size: [0.5, 0.5, 0.5]
+      position: [1.0, 0.0, -0.5]
+      velocity: [0.0, 0.0, 0.0]
+      rotation_deg: [0.0, 0.0, 0.0]
+      angular_velocity: [1.0, 1.0, 0.0]
+      mass: 1.0
+      color: [0.2, 0.8, 0.2]
