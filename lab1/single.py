@@ -9,6 +9,116 @@ from util import *
 ti.init(arch=ti.gpu)
 
 
+class RigidBody:
+    def __init__(self, cfg):
+        self.mass = float(cfg["mass"])
+        self.position = np.array(cfg["position"], dtype=np.float32)
+        self.velocity = np.array(cfg["velocity"], dtype=np.float32)
+        self.angular_velocity = np.array(cfg["angular_velocity"], dtype=np.float32)
+        self.rotation = euler_angle_to_matrix(cfg["rotation_deg"])
+        self.color = np.array(cfg["color"], dtype=np.float32)
+
+    @property
+    def vertex_count(self):
+        raise NotImplementedError
+
+    @property
+    def index_count(self):
+        raise NotImplementedError
+
+    def get_inertia_diag(self):
+        raise NotImplementedError
+
+    def setup_mesh(self, indices_field, i_offset, v_offset):
+        raise NotImplementedError
+
+    def update_mesh_vertices(
+        self, pos_field, rot_field, body_id, vertices_field, v_offset
+    ):
+        raise NotImplementedError
+
+
+@ti.data_oriented
+class Cuboid(RigidBody):
+    vertex_count = 8
+    index_count = 36
+
+    local_verts = ti.Vector.field(3, dtype=ti.f32, shape=8)
+    indices = ti.field(dtype=ti.i32, shape=36)
+    _is_initialized = False
+
+    @classmethod
+    def initialize(cls):
+        if not cls._is_initialized:
+            cls.local_verts.from_numpy(CUBE_LOCAL_VERTS_NP)
+            cls.indices.from_numpy(CUBE_INDICES_NP)
+            cls._is_initialized = True
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        Cuboid.initialize()
+        self.size = np.array(cfg["size"], dtype=np.float32)
+        self.half_extent = 0.5 * self.size
+
+    def cuboid_inertia_diag(m, size):
+        lx, ly, lz = size
+        ixx = (m / 12.0) * (ly * ly + lz * lz)
+        iyy = (m / 12.0) * (lx * lx + lz * lz)
+        izz = (m / 12.0) * (lx * lx + ly * ly)
+        return np.array([ixx, iyy, izz], dtype=np.float32)
+
+    def get_inertia_diag(self):
+        lx, ly, lz = self.size
+        ixx = (self.mass / 12.0) * (ly * ly + lz * lz)
+        iyy = (self.mass / 12.0) * (lx * lx + lz * lz)
+        izz = (self.mass / 12.0) * (lx * lx + ly * ly)
+        return np.array([ixx, iyy, izz], dtype=np.float32)
+
+    def setup_mesh(self, indices_field, i_offset, v_offset):
+        self._setup_mesh(indices_field, i_offset, v_offset)
+
+    @classmethod
+    @ti.kernel
+    def _setup_mesh(
+        cls, indices_field: ti.template(), i_offset: ti.i32, v_offset: ti.i32  # type: ignore
+    ):
+        for i in range(cls.index_count):
+            indices_field[i_offset + i] = v_offset + cls.indices[i]
+
+    def update_mesh_vertices(
+        self, pos_field, rot_field, body_id, vertices_field, v_offset
+    ):
+        self._update_mesh_vertices(
+            pos_field,
+            rot_field,
+            body_id,
+            ti.Vector(self.half_extent),
+            vertices_field,
+            v_offset,
+        )
+
+    @classmethod
+    @ti.kernel
+    def _update_mesh_vertices(
+        cls,
+        pos_field: ti.template(),  # type: ignore
+        rot_field: ti.template(),  # type: ignore
+        body_id: ti.i32,  # type: ignore
+        half_ext: ti.types.vector(3, ti.f32),  # type: ignore
+        vertices_field: ti.template(),  # type: ignore
+        v_offset: ti.i32,  # type: ignore
+    ):
+        pos = pos_field[body_id]
+        rot = rot_field[body_id]
+        for k in range(cls.vertex_count):
+            lv = cls.local_verts[k]
+            local = ti.Vector(
+                [lv[0] * half_ext[0], lv[1] * half_ext[1], lv[2] * half_ext[2]]
+            )
+            world = rot @ local + pos
+            vertices_field[v_offset + k] = world
+
+
 @ti.data_oriented
 class Scene:
     def __init__(self, scene_cfg):
@@ -19,50 +129,59 @@ class Scene:
         self.angular_damping = scene_cfg["angular_damping"]
 
         objects = scene_cfg["objects"]
+
+        self.bodies = []
+        for cfg in objects:
+            body_type = cfg["type"]
+            if body_type == "cuboid":
+                self.bodies.append(Cuboid(cfg))
+            else:
+                raise NotImplementedError(f"Unsupported body type: {body_type}")
+
         self.num_bodies = ti.field(dtype=ti.i32, shape=())
-        n_bodies = len(objects)
+        n_bodies = len(self.bodies)
         self.num_bodies[None] = n_bodies
 
         self.position = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
         self.velocity = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
         self.rotation = ti.Matrix.field(3, 3, dtype=ti.f32, shape=n_bodies)
         self.angular_velocity = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
-        self.half_extent = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
         self.mass = ti.field(dtype=ti.f32, shape=n_bodies)
         self.inertia_body = ti.Matrix.field(3, 3, dtype=ti.f32, shape=n_bodies)
         self.inv_inertia_body = ti.Matrix.field(3, 3, dtype=ti.f32, shape=n_bodies)
 
-        self.mesh_vertices = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies * 8)
-        self.mesh_indices = ti.field(dtype=ti.i32, shape=n_bodies * 36)
+        total_vertices = sum(b.vertex_count for b in self.bodies)
+        total_indices = sum(b.index_count for b in self.bodies)
+
+        self.mesh_vertices = ti.Vector.field(3, dtype=ti.f32, shape=total_vertices)
+        self.mesh_indices = ti.field(dtype=ti.i32, shape=total_indices)
         self.mesh_colors = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
         self.index_offset = ti.field(dtype=ti.i32, shape=n_bodies)
         self.index_count = ti.field(dtype=ti.i32, shape=n_bodies)
 
-        self.cube_local_verts = ti.Vector.field(3, dtype=ti.f32, shape=8)
-        self.cube_indices_ti = ti.field(dtype=ti.i32, shape=36)
-        self.cube_local_verts.from_numpy(CUBE_LOCAL_VERTS_NP)
-        self.cube_indices_ti.from_numpy(CUBE_INDICES_NP)
+        v_offset = 0
+        i_offset = 0
 
-        for i, body in enumerate(objects):
-            size = np.array(body["size"], dtype=np.float32)
-            self.position[i] = np.array(body["position"], dtype=np.float32)
-            self.velocity[i] = np.array(body["velocity"], dtype=np.float32)
-            self.angular_velocity[i] = np.array(
-                body["angular_velocity"], dtype=np.float32
-            )
-            self.rotation[i] = euler_angle_to_matrix(body["rotation_deg"])
-            self.half_extent[i] = 0.5 * size
-            self.mass[i] = float(body["mass"])
-            inertia_diag = cuboid_inertia_diag(self.mass[i], size)
+        for i, body in enumerate(self.bodies):
+            self.position[i] = body.position
+            self.velocity[i] = body.velocity
+            self.angular_velocity[i] = body.angular_velocity
+            self.rotation[i] = body.rotation
+            self.mass[i] = body.mass
+
+            inertia_diag = body.get_inertia_diag()
             self.inertia_body[i] = np.diag(inertia_diag)
-            inv_inertia_diag = 1.0 / np.maximum(inertia_diag, 1e-8)
-            self.inv_inertia_body[i] = np.diag(inv_inertia_diag)
-            self.mesh_colors[i] = np.array(body["color"], dtype=np.float32)
-            self.index_count[i] = 36
-            if i == 0:
-                self.index_offset[i] = 0
-            else:
-                self.index_offset[i] = self.index_offset[i - 1] + self.index_count[i]
+            self.inv_inertia_body[i] = np.diag(1.0 / np.maximum(inertia_diag, 1e-8))
+
+            self.mesh_colors[i] = body.color
+
+            self.index_count[i] = body.index_count
+            self.index_offset[i] = i_offset
+
+            body.setup_mesh(self.mesh_indices, i_offset, v_offset)
+
+            v_offset += body.vertex_count
+            i_offset += body.index_count
 
         self.update_mesh_vertices()
 
@@ -82,22 +201,13 @@ class Scene:
             self.rotation[i] = state["rotation"][i]
             self.angular_velocity[i] = state["angular_velocity"][i]
 
-    @ti.kernel
     def update_mesh_vertices(self):
-        for i in range(self.num_bodies[None]):
-            pos = self.position[i]
-            rot = self.rotation[i]
-            ext = self.half_extent[i]
-            for k in range(8):
-                lv = self.cube_local_verts[k]
-                local = ti.Vector([lv[0] * ext[0], lv[1] * ext[1], lv[2] * ext[2]])
-                world = rot @ local + pos
-                self.mesh_vertices[i * 8 + k] = world
-            for t in range(12):
-                for v in range(3):
-                    self.mesh_indices[i * 36 + t * 3 + v] = (
-                        i * 8 + self.cube_indices_ti[t * 3 + v]
-                    )
+        v_offset = 0
+        for i, body in enumerate(self.bodies):
+            body.update_mesh_vertices(
+                self.position, self.rotation, i, self.mesh_vertices, v_offset
+            )
+            v_offset += body.vertex_count
 
 
 class Simulator:
@@ -137,7 +247,7 @@ class Simulator:
             pos += dt * vel
 
             for i in range(self.scene.num_bodies[None]):
-                rot[i] = integrate_rotation(rot[i], ang_vel[i], dt)
+                rot[i] = self._integrate_rotation(rot[i], ang_vel[i], dt)
 
         self.scene.set_state(
             {
@@ -148,6 +258,21 @@ class Simulator:
             }
         )
         self.scene.update_mesh_vertices()
+
+    def _integrate_rotation(r, omega, dt):
+        dtheta = omega * dt
+        theta = np.linalg.norm(dtheta)
+        if theta < 1e-7:
+            delta = np.eye(3, dtype=np.float32) + skew_symmetric(dtheta)
+        else:
+            axis = dtheta / theta
+            k = skew_symmetric(axis)
+            delta = (
+                np.eye(3, dtype=np.float32)
+                + np.sin(theta) * k
+                + (1.0 - np.cos(theta)) * (k @ k)
+            )
+        return delta @ r
 
     def run(self, steps):
         window = ti.ui.Window("Rigid Body Simulation", (1280, 720), vsync=True)
