@@ -9,6 +9,7 @@ class Simulator:
     def __init__(self, scene: Scene):
         self.scene = scene
         self.masses = self.scene.mass.to_numpy()
+        self.inv_masses = self.scene.inv_mass.to_numpy()
         self.inv_inertia = self.scene.inv_inertia_body.to_numpy()
         self.inertia = self.scene.inertia_body.to_numpy()
         self.n_bodies = self.scene.num_bodies[None]
@@ -37,11 +38,13 @@ class Simulator:
 
         for _ in range(substeps):
             if applied_forces is not None:
-                vel += dt * (applied_forces / self.masses[:, None])
-            vel += dt * self.scene.gravity[None, :]
+                vel += dt * applied_forces * self.inv_masses[:, None]
+            vel += dt * self.scene.gravity[None, :] * (self.inv_masses[:, None] > 0.0)
             vel *= max(0.0, 1.0 - self.scene.linear_damping * dt)
 
             for i in range(self.n_bodies):
+                if self.inv_masses[i] == 0.0:
+                    continue
                 R = rot[i]
                 I_inv = R @ self.inv_inertia[i] @ R.T
                 I_curr = R @ self.inertia[i] @ R.T
@@ -60,11 +63,13 @@ class Simulator:
             pos += dt * vel
 
             for i in range(self.n_bodies):
+                if self.inv_masses[i] == 0.0:
+                    continue
                 rot[i] = self._integrate_rotation(rot[i], ang_vel[i], dt)
 
-        pos, vel, rot, ang_vel = self.collision_solver.detect_and_resolve(
-            pos, vel, rot, ang_vel
-        )
+            pos, vel, rot, ang_vel = self.collision_solver.detect_and_resolve(
+                pos, vel, rot, ang_vel, dt
+            )
 
         self.scene.set_state(pos, vel, rot, ang_vel)
         self.scene.update_mesh_vertices()
@@ -83,6 +88,12 @@ class Simulator:
                 + (1.0 - np.cos(theta)) * (k @ k)
             )
         return delta @ r
+
+    def _reset(self, camera):
+        camera.position(3, 2, 3)
+        camera.lookat(0, 0.5, 0)
+        camera.up(0, 1, 0)
+        self.scene.reset()
 
     def run(self, steps):
         window = ti.ui.Window("Rigid Body Simulation", (1280, 720), vsync=True)
@@ -104,17 +115,23 @@ class Simulator:
             ctrl_pressed = window.is_pressed(ti.ui.CTRL)
             lmb_pressed = window.is_pressed(ti.ui.LMB)
             rmb_pressed = window.is_pressed(ti.ui.RMB)
+            space_pressed = window.is_pressed(ti.ui.SPACE)
+            esc_pressed = window.is_pressed(ti.ui.ESCAPE)
             mouse_pos = window.get_cursor_pos()
-
-            if not ctrl_pressed:
-                camera.track_user_inputs(
-                    window, movement_speed=0.03, hold_key=ti.ui.LMB
-                )
 
             applied_forces = np.zeros((self.n_bodies, 3), dtype=np.float32)
             applied_torques = np.zeros((self.n_bodies, 3), dtype=np.float32)
 
-            if ctrl_pressed and (lmb_pressed or rmb_pressed):
+            if not ctrl_pressed:
+                if esc_pressed:
+                    return
+                elif space_pressed:
+                    self._reset(camera)
+                else:
+                    camera.track_user_inputs(
+                        window, movement_speed=0.03, hold_key=ti.ui.LMB
+                    )
+            elif lmb_pressed or rmb_pressed:
                 cam_p = np.array(camera.curr_position, dtype=np.float32)
                 cam_look = np.array(camera.curr_lookat, dtype=np.float32)
                 cam_up = np.array(camera.curr_up, dtype=np.float32)

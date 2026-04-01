@@ -6,12 +6,20 @@ from util import euler_angle_to_matrix, ray_aabb_intersect
 
 class RigidBody:
     def __init__(self, cfg):
-        self.mass = float(cfg["mass"])
-        self.position = np.array(cfg["position"], dtype=np.float32)
-        self.velocity = np.array(cfg["velocity"], dtype=np.float32)
-        self.angular_velocity = np.array(cfg["angular_velocity"], dtype=np.float32)
-        self.rotation = euler_angle_to_matrix(cfg["rotation_deg"])
         self.color = np.array(cfg["color"], dtype=np.float32)
+        self.dyn_type = cfg["dyn_type"]
+        self.position = np.array(cfg["position"], dtype=np.float32)
+        self.rotation = euler_angle_to_matrix(cfg["rotation_deg"])
+        if self.dyn_type == "freeze":
+            self.mass = np.inf
+            self.inv_mass = 0.0
+            self.velocity = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            self.angular_velocity = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        elif self.dyn_type == "free":
+            self.mass = float(cfg["mass"])
+            self.inv_mass = 1.0 / self.mass
+            self.velocity = np.array(cfg["velocity"], dtype=np.float32)
+            self.angular_velocity = np.array(cfg["angular_velocity"], dtype=np.float32)
 
     @property
     def vertex_count(self):
@@ -66,6 +74,8 @@ class Cuboid(RigidBody):
         return np.array([ixx, iyy, izz], dtype=np.float32)
 
     def ray_intersect(self, orig_l, dir_l):
+        if self.dyn_type == "freeze":
+            return False, None, None
         return ray_aabb_intersect(orig_l, dir_l, self.half_extent)
 
     def setup_mesh(self, indices_field, i_offset, v_offset):

@@ -31,6 +31,7 @@ class Scene:
         self.rotation = ti.Matrix.field(3, 3, dtype=ti.f32, shape=n_bodies)
         self.angular_velocity = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
         self.mass = ti.field(dtype=ti.f32, shape=n_bodies)
+        self.inv_mass = ti.field(dtype=ti.f32, shape=n_bodies)
         self.inertia_body = ti.Matrix.field(3, 3, dtype=ti.f32, shape=n_bodies)
         self.inv_inertia_body = ti.Matrix.field(3, 3, dtype=ti.f32, shape=n_bodies)
 
@@ -52,10 +53,15 @@ class Scene:
             self.angular_velocity[i] = body.angular_velocity
             self.rotation[i] = body.rotation
             self.mass[i] = body.mass
+            self.inv_mass[i] = body.inv_mass
 
             inertia_diag = body.get_inertia_diag()
             self.inertia_body[i] = np.diag(inertia_diag)
-            self.inv_inertia_body[i] = np.diag(1.0 / np.maximum(inertia_diag, 1e-8))
+            
+            if body.dyn_type == "freeze":
+                self.inv_inertia_body[i] = np.zeros((3, 3), dtype=np.float32)
+            else:
+                self.inv_inertia_body[i] = np.diag(1.0 / np.maximum(inertia_diag, 1e-8))
 
             self.mesh_colors[i] = body.color
 
@@ -66,6 +72,15 @@ class Scene:
 
             v_offset += body.vertex_count
             i_offset += body.index_count
+
+        self.init_pos = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
+        self.init_vel = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
+        self.init_rot = ti.Matrix.field(3, 3, dtype=ti.f32, shape=n_bodies)
+        self.init_ang_vel = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
+        self.init_pos.copy_from(self.position)
+        self.init_vel.copy_from(self.velocity)
+        self.init_rot.copy_from(self.rotation)
+        self.init_ang_vel.copy_from(self.angular_velocity)
 
         self.update_mesh_vertices()
 
@@ -91,3 +106,9 @@ class Scene:
                 self.position, self.rotation, i, self.mesh_vertices, v_offset
             )
             v_offset += body.vertex_count
+
+    def reset(self):
+        self.position.copy_from(self.init_pos)
+        self.velocity.copy_from(self.init_vel)
+        self.rotation.copy_from(self.init_rot)
+        self.angular_velocity.copy_from(self.init_ang_vel)
