@@ -1,5 +1,6 @@
 import numpy as np
 import taichi as ti
+import fcl
 from constants import *
 from util import euler_angle_to_matrix, ray_aabb_intersect
 
@@ -30,6 +31,9 @@ class RigidBody:
         raise NotImplementedError
 
     def get_inertia_diag(self):
+        raise NotImplementedError
+
+    def to_fcl(self):
         raise NotImplementedError
 
     def setup_mesh(self, indices_field, i_offset, v_offset):
@@ -72,6 +76,12 @@ class Cuboid(RigidBody):
         iyy = (self.mass / 12.0) * (lx * lx + lz * lz)
         izz = (self.mass / 12.0) * (lx * lx + ly * ly)
         return np.array([ixx, iyy, izz], dtype=np.float32)
+
+    def to_fcl(self):
+        geom = fcl.Box(self.size[0], self.size[1], self.size[2])
+        # The transform will be updated every frame, so initialize with identity
+        tf = fcl.Transform()
+        return fcl.CollisionObject(geom, tf)
 
     def ray_intersect(self, orig_l, dir_l):
         if self.dyn_type == "freeze":

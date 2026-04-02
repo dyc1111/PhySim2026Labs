@@ -39,7 +39,7 @@ class Simulator:
         for _ in range(substeps):
             if applied_forces is not None:
                 vel += dt * applied_forces * self.inv_masses[:, None]
-            vel += dt * self.scene.gravity[None, :] * (self.inv_masses[:, None] > 0.0)
+            vel += dt * self.scene.gravity[None, :] * self.inv_masses[:, None]
             vel *= max(0.0, 1.0 - self.scene.linear_damping * dt)
 
             for i in range(self.n_bodies):
@@ -60,16 +60,16 @@ class Simulator:
                 ang_vel[i] += dt * (I_inv @ tau_total)
 
             ang_vel *= max(0.0, 1.0 - self.scene.angular_damping * dt)
-            pos += dt * vel
 
+            vel, ang_vel = self.collision_solver.detect_and_resolve(
+                pos, vel, rot, ang_vel, dt
+            )
+
+            pos += dt * vel
             for i in range(self.n_bodies):
                 if self.inv_masses[i] == 0.0:
                     continue
                 rot[i] = self._integrate_rotation(rot[i], ang_vel[i], dt)
-
-            pos, vel, rot, ang_vel = self.collision_solver.detect_and_resolve(
-                pos, vel, rot, ang_vel, dt
-            )
 
         self.scene.set_state(pos, vel, rot, ang_vel)
         self.scene.update_mesh_vertices()
