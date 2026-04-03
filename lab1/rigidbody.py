@@ -156,7 +156,7 @@ class Sphere(RigidBody):
     def __init__(self, cfg):
         super().__init__(cfg)
         Sphere.initialize()
-        self.radius = float(cfg["radius"])
+        self.radius = float(cfg["size"])
 
     @property
     def vertex_count(self):
