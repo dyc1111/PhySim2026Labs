@@ -57,7 +57,7 @@ class Scene:
 
             inertia_diag = body.get_inertia_diag()
             self.inertia_body[i] = np.diag(inertia_diag)
-            
+
             if body.dyn_type == "freeze":
                 self.inv_inertia_body[i] = np.zeros((3, 3), dtype=np.float32)
             else:
@@ -91,13 +91,55 @@ class Scene:
         ang_vel = self.angular_velocity.to_numpy().copy()
         return pos, vel, rot, ang_vel
 
-    def set_state(self, pos, vel, rot, ang_vel):
-        n = self.num_bodies[None]
-        for i in range(n):
-            self.position[i] = pos[i]
-            self.velocity[i] = vel[i]
-            self.rotation[i] = rot[i]
-            self.angular_velocity[i] = ang_vel[i]
+    def set_velocities(self, vel, ang_vel):
+        self.velocity.from_numpy(vel)
+        self.angular_velocity.from_numpy(ang_vel)
+
+    @ti.func
+    def _get_skew_symmetric(self, v: ti.template()):  # type: ignore
+        return ti.Matrix([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+
+    @ti.kernel
+    def pre_solve_kinematics(
+        self, dt: ti.f32, forces: ti.types.ndarray(), torques: ti.types.ndarray()  # type: ignore
+    ):
+        for i in range(self.num_bodies[None]):
+            if self.inv_mass[i] > 0.0:
+                # linear
+                f = ti.Vector([forces[i, 0], forces[i, 1], forces[i, 2]])
+                g = ti.Vector([self.gravity[0], self.gravity[1], self.gravity[2]])
+                self.velocity[i] += dt * f * self.inv_mass[i]
+                self.velocity[i] += dt * g * self.inv_mass[i]
+                self.velocity[i] *= ti.max(0.0, 1.0 - self.linear_damping * dt)
+
+                # angular
+                tau = ti.Vector([torques[i, 0], torques[i, 1], torques[i, 2]])
+                R = self.rotation[i]
+                I_inv = R @ self.inv_inertia_body[i] @ R.transpose()
+                I_curr = R @ self.inertia_body[i] @ R.transpose()
+                omega = self.angular_velocity[i]
+
+                tau_total = tau - omega.cross(I_curr @ omega)
+                self.angular_velocity[i] += dt * (I_inv @ tau_total)
+                self.angular_velocity[i] *= ti.max(0.0, 1.0 - self.angular_damping * dt)
+
+    @ti.kernel
+    def post_solve_kinematics(self, dt: ti.f32):  # type: ignore
+        for i in range(self.num_bodies[None]):
+            if self.inv_mass[i] > 0.0:
+                self.position[i] += dt * self.velocity[i]
+
+                omega = self.angular_velocity[i]
+                dtheta = omega * dt
+                theta = dtheta.norm()
+                delta = ti.Matrix.identity(ti.f32, 3)
+                if theta < 1e-7:
+                    delta += self._get_skew_symmetric(dtheta)
+                else:
+                    axis = dtheta / theta
+                    k = self._get_skew_symmetric(axis)
+                    delta += ti.sin(theta) * k + (1.0 - ti.cos(theta)) * (k @ k)
+                self.rotation[i] = delta @ self.rotation[i]
 
     def update_mesh_vertices(self):
         v_offset = 0

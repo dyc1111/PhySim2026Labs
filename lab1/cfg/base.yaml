@@ -1,0 +1,5 @@
+scene_name: ${hydra:runtime.choices.task}
+
+defaults:
+  - _self_
+  - scene: main
