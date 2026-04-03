@@ -6,12 +6,7 @@ from rigidbody import Cuboid, Sphere, Cylinder
 @ti.data_oriented
 class Scene:
     def __init__(self, scene_cfg):
-        self.dt = scene_cfg["dt"]
-        self.substeps = scene_cfg["substeps"]
         self.gravity = np.array(scene_cfg["gravity"], dtype=np.float32)
-        self.linear_damping = scene_cfg["linear_damping"]
-        self.angular_damping = scene_cfg["angular_damping"]
-
         objects = scene_cfg["objects"]
 
         self.bodies = []
@@ -114,7 +109,6 @@ class Scene:
                 g = ti.Vector([self.gravity[0], self.gravity[1], self.gravity[2]])
                 self.velocity[i] += dt * f * self.inv_mass[i]
                 self.velocity[i] += dt * g * self.inv_mass[i]
-                self.velocity[i] *= ti.max(0.0, 1.0 - self.linear_damping * dt)
 
                 # angular
                 tau = ti.Vector([torques[i, 0], torques[i, 1], torques[i, 2]])
@@ -125,7 +119,6 @@ class Scene:
 
                 tau_total = tau - omega.cross(I_curr @ omega)
                 self.angular_velocity[i] += dt * (I_inv @ tau_total)
-                self.angular_velocity[i] *= ti.max(0.0, 1.0 - self.angular_damping * dt)
 
     @ti.kernel
     def post_solve_kinematics(self, dt: ti.f32):  # type: ignore

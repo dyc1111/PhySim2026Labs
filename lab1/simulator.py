@@ -6,11 +6,14 @@ from interaction import InteractionHandler
 
 
 class Simulator:
-    def __init__(self, scene: Scene):
+    def __init__(self, sim_cfg, scene: Scene):
         self.scene = scene
         self.n_bodies = self.scene.num_bodies[None]
-        self.collision_solver = Collision(self.scene)
+        self.collision_solver = Collision(sim_cfg["collision"], self.scene)
         self.interaction_handler = InteractionHandler(self.scene)
+        self.dt = sim_cfg["dt"]
+        self.steps = sim_cfg["steps"]
+        self.substeps = sim_cfg["substeps"]
 
     def _render(self, window, camera, canvas, scene_3d):
         scene_3d.set_camera(camera)
@@ -29,15 +32,14 @@ class Simulator:
         window.show()
 
     def _step(self, applied_forces=None, applied_torques=None):
-        substeps = self.scene.substeps
-        dt = self.scene.dt / substeps
+        dt = self.dt / self.substeps
 
         if applied_forces is None:
             applied_forces = np.zeros((self.n_bodies, 3), dtype=np.float32)
         if applied_torques is None:
             applied_torques = np.zeros((self.n_bodies, 3), dtype=np.float32)
 
-        for _ in range(substeps):
+        for _ in range(self.substeps):
             # 1. presolve vel & ang_vel
             self.scene.pre_solve_kinematics(dt, applied_forces, applied_torques)
 
@@ -59,7 +61,7 @@ class Simulator:
         camera.up(0, 1, 0)
         self.scene.reset()
 
-    def run(self, steps):
+    def run(self):
         window = ti.ui.Window("Rigid Body Simulation", (1280, 720), vsync=True)
         canvas = window.get_canvas()
         scene_3d = window.get_scene()
@@ -69,7 +71,9 @@ class Simulator:
         camera.up(0, 1, 0)
 
         frame = 0
-        while window.running and frame < (steps if steps > 0 else float("inf")):
+        while window.running and frame < (
+            self.steps if self.steps > 0 else float("inf")
+        ):
             if window.is_pressed(ti.ui.ESCAPE):
                 break
             elif window.is_pressed(ti.ui.SPACE):

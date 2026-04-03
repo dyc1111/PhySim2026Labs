@@ -3,9 +3,11 @@ import fcl
 
 
 class Collision:
-    def __init__(self, scene):
+    def __init__(self, c_cfg, scene):
         self.scene = scene
-        self.restitution = 0.5  # Coefficient of restitution (c)
+        self.restitution = c_cfg["restitution"]
+        self.mu = c_cfg["mu"]
+        self.max_contact = c_cfg["max_c"]
         self.fcl_objs = [body.to_fcl() for body in self.scene.bodies]
 
     def get_contacts(self, idx_a, idx_b, pos, rot):
@@ -17,7 +19,9 @@ class Collision:
         obj_b.setTransform(fcl.Transform(rot[idx_b], pos[idx_b]))
 
         # Perform collision check
-        request = fcl.CollisionRequest(num_max_contacts=10, enable_contact=True)
+        request = fcl.CollisionRequest(
+            num_max_contacts=self.max_contact, enable_contact=True
+        )
         result = fcl.CollisionResult()
 
         fcl.collide(obj_a, obj_b, request, result)
@@ -64,6 +68,9 @@ class Collision:
             v_rel_n = np.dot(v_rel, n)
             if v_rel_n >= 0:
                 continue
+            v_rel_t = v_rel - v_rel_n * n
+            t = v_rel_t / (np.linalg.norm(v_rel_t) + 1e-8)
+            v_rel_t = np.linalg.norm(v_rel_t)
 
             I_inv_a = rot[a] @ inv_inertia_body[a] @ rot[a].T
             I_inv_b = rot[b] @ inv_inertia_body[b] @ rot[b].T
@@ -78,14 +85,16 @@ class Collision:
             bias = (0.2 / dt) * max(d - 0.005, 0.0)
 
             # Compute impulse
-            J = (-(1.0 + self.restitution) * v_rel_n + bias) / denom
+            Jn = (-(1.0 + self.restitution) * v_rel_n + bias) / denom
+            Jt = np.clip(-v_rel_t / denom, -self.mu * Jn, self.mu * Jn)
+            J = Jn * n + Jt * t
 
             # Apply linear impulse
-            vel[a] += (J * inv_masses[a]) * n
-            vel[b] -= (J * inv_masses[b]) * n
+            vel[a] += J * inv_masses[a]
+            vel[b] -= J * inv_masses[b]
 
             # Apply angular impulse
-            ang_vel[a] += I_inv_a @ np.cross(x_a, J * n)
-            ang_vel[b] -= I_inv_b @ np.cross(x_b, J * n)
+            ang_vel[a] += I_inv_a @ np.cross(x_a, J)
+            ang_vel[b] -= I_inv_b @ np.cross(x_b, J)
 
         return vel, ang_vel

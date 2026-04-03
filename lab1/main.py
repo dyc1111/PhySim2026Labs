@@ -11,11 +11,10 @@ from simulator import Simulator
 @hydra.main(config_path="cfg", config_name="base", version_base=None)
 def main(cfg):
     scene_cfg = OmegaConf.to_container(cfg.scene, resolve=True)
+    sim_cfg = OmegaConf.to_container(cfg.sim, resolve=True)
     scene = Scene(scene_cfg)
-    simulator = Simulator(scene)
-
-    steps = scene_cfg["steps"]
-    simulator.run(steps)
+    simulator = Simulator(sim_cfg, scene)
+    simulator.run()
 
 
 if __name__ == "__main__":

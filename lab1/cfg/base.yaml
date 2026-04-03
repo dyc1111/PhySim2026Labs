@@ -1,5 +1,14 @@
 scene_name: ${hydra:runtime.choices.task}
 
+sim:
+  dt: 0.0041666667
+  steps: -1
+  substeps: 4
+  collision:
+    restitution: 0.5
+    mu: 0.5
+    max_c: 5
+
 defaults:
   - _self_
-  - scene: main
+  - scene: single
