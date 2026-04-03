@@ -40,7 +40,25 @@ objects:
     rotation_deg: [0.0, 0.0, 0.0]
     angular_velocity: [0.0, 0.0, 0.0]
     mass: 1.0
-    color: [0.8, 0.8, 0.8]
+    color: [0.2, 0.8, 0.8]
+  - type: cuboid
+    dyn_type: free
+    size: [0.6, 0.6, 0.6]
+    position: [0.0, 2.7, 0.0]
+    velocity: [0.0, 0.0, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 1.0
+    color: [0.8, 0.2, 0.8]
+  - type: cuboid
+    dyn_type: free
+    size: [0.6, 0.6, 0.6]
+    position: [0.0, 3.3, 0.0]
+    velocity: [0.0, 0.0, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 1.0
+    color: [0.8, 0.8, 0.2]
   - type: cuboid
     dyn_type: freeze
     size: [10.0, 0.01, 10.0]

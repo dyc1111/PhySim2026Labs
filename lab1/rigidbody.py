@@ -2,7 +2,12 @@ import numpy as np
 import taichi as ti
 import fcl
 from constants import *
-from util import euler_angle_to_matrix, ray_aabb_intersect
+from util import (
+    euler_angle_to_matrix,
+    ray_aabb_intersect,
+    ray_sphere_intersect,
+    ray_cylinder_intersect,
+)
 
 
 class RigidBody:
@@ -129,5 +134,185 @@ class Cuboid(RigidBody):
             local = ti.Vector(
                 [lv[0] * half_ext[0], lv[1] * half_ext[1], lv[2] * half_ext[2]]
             )
+            world = rot @ local + pos
+            vertices_field[v_offset + k] = world
+
+
+@ti.data_oriented
+class Sphere(RigidBody):
+    _is_initialized = False
+
+    @classmethod
+    def initialize(cls):
+        if not cls._is_initialized:
+            cls.vertex_count = SPHERE_LOCAL_VERTS_NP.shape[0]
+            cls.index_count = SPHERE_INDICES_NP.shape[0]
+            cls.local_verts = ti.Vector.field(3, dtype=ti.f32, shape=cls.vertex_count)
+            cls.indices = ti.field(dtype=ti.i32, shape=cls.index_count)
+            cls.local_verts.from_numpy(SPHERE_LOCAL_VERTS_NP)
+            cls.indices.from_numpy(SPHERE_INDICES_NP)
+            cls._is_initialized = True
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        Sphere.initialize()
+        self.radius = float(cfg["radius"])
+
+    @property
+    def vertex_count(self):
+        return Sphere.vertex_count
+
+    @property
+    def index_count(self):
+        return Sphere.index_count
+
+    def get_inertia_diag(self):
+        i_val = (2.0 / 5.0) * self.mass * self.radius * self.radius
+        return np.array([i_val, i_val, i_val], dtype=np.float32)
+
+    def to_fcl(self):
+        geom = fcl.Sphere(self.radius)
+        tf = fcl.Transform()
+        return fcl.CollisionObject(geom, tf)
+
+    def ray_intersect(self, orig_l, dir_l):
+        if self.dyn_type == "freeze":
+            return False, None, None
+        return ray_sphere_intersect(orig_l, dir_l, self.radius)
+
+    def setup_mesh(self, indices_field, i_offset, v_offset):
+        self._setup_mesh(indices_field, i_offset, v_offset, self.index_count)
+
+    @classmethod
+    @ti.kernel
+    def _setup_mesh(
+        cls, indices_field: ti.template(), i_offset: ti.i32, v_offset: ti.i32, n_idx: ti.i32  # type: ignore
+    ):
+        for i in range(n_idx):
+            indices_field[i_offset + i] = v_offset + cls.indices[i]
+
+    def update_mesh_vertices(
+        self, pos_field, rot_field, body_id, vertices_field, v_offset
+    ):
+        self._update_mesh_vertices(
+            pos_field,
+            rot_field,
+            body_id,
+            self.radius,
+            vertices_field,
+            v_offset,
+            self.vertex_count,
+        )
+
+    @classmethod
+    @ti.kernel
+    def _update_mesh_vertices(
+        cls,
+        pos_field: ti.template(),  # type: ignore
+        rot_field: ti.template(),  # type: ignore
+        body_id: ti.i32,  # type: ignore
+        radius: ti.f32,  # type: ignore
+        vertices_field: ti.template(),  # type: ignore
+        v_offset: ti.i32,  # type: ignore
+        n_vtx: ti.i32,  # type: ignore
+    ):
+        pos = pos_field[body_id]
+        rot = rot_field[body_id]
+        for k in range(n_vtx):
+            lv = cls.local_verts[k]
+            # uniform scaling
+            local = ti.Vector([lv[0] * radius, lv[1] * radius, lv[2] * radius])
+            world = rot @ local + pos
+            vertices_field[v_offset + k] = world
+
+
+@ti.data_oriented
+class Cylinder(RigidBody):
+    _is_initialized = False
+
+    @classmethod
+    def initialize(cls):
+        if not cls._is_initialized:
+            cls.vertex_count = CYLINDER_LOCAL_VERTS_NP.shape[0]
+            cls.index_count = CYLINDER_INDICES_NP.shape[0]
+            cls.local_verts = ti.Vector.field(3, dtype=ti.f32, shape=cls.vertex_count)
+            cls.indices = ti.field(dtype=ti.i32, shape=cls.index_count)
+            cls.local_verts.from_numpy(CYLINDER_LOCAL_VERTS_NP)
+            cls.indices.from_numpy(CYLINDER_INDICES_NP)
+            cls._is_initialized = True
+
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        Cylinder.initialize()
+        self.radius = float(cfg["size"][0])
+        self.height = float(cfg["size"][1])
+
+    @property
+    def vertex_count(self):
+        return Cylinder.vertex_count
+
+    @property
+    def index_count(self):
+        return Cylinder.index_count
+
+    def get_inertia_diag(self):
+        ixx = iyy = (self.mass / 12.0) * (3.0 * self.radius**2 + self.height**2)
+        izz = (self.mass / 2.0) * self.radius**2
+        return np.array([ixx, iyy, izz], dtype=np.float32)
+
+    def to_fcl(self):
+        geom = fcl.Cylinder(self.radius, self.height)
+        tf = fcl.Transform()
+        return fcl.CollisionObject(geom, tf)
+
+    def ray_intersect(self, orig_l, dir_l):
+        if self.dyn_type == "freeze":
+            return False, None, None
+        return ray_cylinder_intersect(orig_l, dir_l, self.radius, self.height)
+
+    def setup_mesh(self, indices_field, i_offset, v_offset):
+        self._setup_mesh(indices_field, i_offset, v_offset, self.index_count)
+
+    @classmethod
+    @ti.kernel
+    def _setup_mesh(
+        cls, indices_field: ti.template(), i_offset: ti.i32, v_offset: ti.i32, n_idx: ti.i32  # type: ignore
+    ):
+        for i in range(n_idx):
+            indices_field[i_offset + i] = v_offset + cls.indices[i]
+
+    def update_mesh_vertices(
+        self, pos_field, rot_field, body_id, vertices_field, v_offset
+    ):
+        self._update_mesh_vertices(
+            pos_field,
+            rot_field,
+            body_id,
+            self.radius,
+            self.height,
+            vertices_field,
+            v_offset,
+            self.vertex_count,
+        )
+
+    @classmethod
+    @ti.kernel
+    def _update_mesh_vertices(
+        cls,
+        pos_field: ti.template(),  # type: ignore
+        rot_field: ti.template(),  # type: ignore
+        body_id: ti.i32,  # type: ignore
+        radius: ti.f32,  # type: ignore
+        height: ti.f32,  # type: ignore
+        vertices_field: ti.template(),  # type: ignore
+        v_offset: ti.i32,  # type: ignore
+        n_vtx: ti.i32,  # type: ignore
+    ):
+        pos = pos_field[body_id]
+        rot = rot_field[body_id]
+        for k in range(n_vtx):
+            lv = cls.local_verts[k]
+            # scale X/Y by radius, Z by height
+            local = ti.Vector([lv[0] * radius, lv[1] * radius, lv[2] * height])
             world = rot @ local + pos
             vertices_field[v_offset + k] = world

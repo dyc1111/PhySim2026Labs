@@ -1,6 +1,6 @@
 import taichi as ti
 import numpy as np
-from rigidbody import Cuboid
+from rigidbody import Cuboid, Sphere, Cylinder
 
 
 @ti.data_oriented
@@ -19,6 +19,10 @@ class Scene:
             body_type = cfg["type"]
             if body_type == "cuboid":
                 self.bodies.append(Cuboid(cfg))
+            elif body_type == "sphere":
+                self.bodies.append(Sphere(cfg))
+            elif body_type == "cylinder":
+                self.bodies.append(Cylinder(cfg))
             else:
                 raise NotImplementedError(f"Unsupported body type: {body_type}")
 

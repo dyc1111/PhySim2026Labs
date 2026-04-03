@@ -70,7 +70,7 @@ class InteractionHandler:
                     dx = mouse_pos[0] - self.original_mouse_pos[0]
                     dy = mouse_pos[1] - self.original_mouse_pos[1]
 
-                    F = (dx * R_vec + dy * U_vec) * 100.0
+                    F = (dx * R_vec + dy * U_vec) * 2000.0
                     applied_forces[self.selected_body] = F
 
                 elif self.interaction_mode == "ROTATE":
@@ -93,7 +93,7 @@ class InteractionHandler:
                         1280.0 / 720.0,
                     )
 
-                    V_drag = (curr_ray_dir - orig_ray_dir) * 100.0
+                    V_drag = (curr_ray_dir - orig_ray_dir) * 2000.0
                     N = self.click_normal_w
                     V_tangent = V_drag - np.dot(V_drag, N) * N
 

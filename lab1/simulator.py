@@ -54,8 +54,8 @@ class Simulator:
         self.scene.update_mesh_vertices()
 
     def _reset(self, camera):
-        camera.position(3, 2, 3)
-        camera.lookat(0, 0.5, 0)
+        camera.position(-2, 1, -2)
+        camera.lookat(0, 1, 0)
         camera.up(0, 1, 0)
         self.scene.reset()
 
@@ -64,8 +64,8 @@ class Simulator:
         canvas = window.get_canvas()
         scene_3d = window.get_scene()
         camera = ti.ui.Camera()
-        camera.position(3, 2, 3)
-        camera.lookat(0, 0.5, 0)
+        camera.position(-2, 1, -2)
+        camera.lookat(0, 1, 0)
         camera.up(0, 1, 0)
 
         frame = 0
