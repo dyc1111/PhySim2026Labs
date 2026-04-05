@@ -3,3 +3,4 @@ vcx-sim-master/
 *.ini
 outputs
 __pycache__
+*.log

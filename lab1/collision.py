@@ -46,14 +46,31 @@ class Collision:
         inv_inertia_body = self.scene.inv_inertia_body.to_numpy()
 
         # 1. Collision Detection
-        contacts = []
+        contact_groups = {}
         for i in range(n_bodies):
             for j in range(i + 1, n_bodies):
                 c_list = self.get_contacts(i, j, pos, rot)
-                contacts.extend(c_list)
+                if c_list:
+                    contact_groups[(i, j)] = c_list
 
-        if not contacts:
+        if not contact_groups:
             return vel, ang_vel
+
+        contacts = []
+        for (a, b), c_list in contact_groups.items():
+            n_avg = np.mean([np.array(c[2]) for c in c_list], axis=0)
+            n_len = np.linalg.norm(n_avg)
+            if n_len < 1e-6:
+                n_avg = np.array(c_list[0][2])
+            else:
+                n_avg /= n_len
+
+            p_avg = np.mean([np.array(c[3]) for c in c_list], axis=0)
+            d_max = np.max([c[4] for c in c_list])
+            contacts.append((a, b, n_avg, p_avg, d_max))
+
+        delta_vel = np.zeros_like(vel)
+        delta_ang_vel = np.zeros_like(ang_vel)
 
         for a, b, n, p, d in contacts:
             x_a = p - pos[a]
@@ -63,6 +80,7 @@ class Collision:
             v_p_a = vel[a] + np.cross(ang_vel[a], x_a)
             v_p_b = vel[b] + np.cross(ang_vel[b], x_b)
             v_rel = v_p_a - v_p_b
+            # print(v_rel, n, num_c, d)
 
             # Check if the two bodies are already separating
             v_rel_n = np.dot(v_rel, n)
@@ -84,17 +102,21 @@ class Collision:
             # Using Baumgarte Stabilization
             bias = (0.2 / dt) * max(d - 0.005, 0.0)
 
-            # Compute impulse
+            # Compute impulse and scale by num_c to avoid over-correction
             Jn = (-(1.0 + self.restitution) * v_rel_n + bias) / denom
-            Jt = np.clip(-v_rel_t / denom, -self.mu * Jn, self.mu * Jn)
+            Jt_target = -v_rel_t / denom
+            Jt = np.clip(Jt_target, -self.mu * Jn, self.mu * Jn)
             J = Jn * n + Jt * t
 
             # Apply linear impulse
-            vel[a] += J * inv_masses[a]
-            vel[b] -= J * inv_masses[b]
+            delta_vel[a] += J * inv_masses[a]
+            delta_vel[b] -= J * inv_masses[b]
 
             # Apply angular impulse
-            ang_vel[a] += I_inv_a @ np.cross(x_a, J)
-            ang_vel[b] -= I_inv_b @ np.cross(x_b, J)
+            delta_ang_vel[a] += I_inv_a @ np.cross(x_a, J)
+            delta_ang_vel[b] -= I_inv_b @ np.cross(x_b, J)
+
+        vel += delta_vel
+        ang_vel += delta_ang_vel
 
         return vel, ang_vel

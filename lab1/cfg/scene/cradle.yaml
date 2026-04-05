@@ -1,0 +1,49 @@
+gravity: [0.0, 0.0, 0.0]
+linear_damping: 0
+angular_damping: 0
+objects:
+  - type: sphere
+    dyn_type: free
+    size: 0.2
+    position: [0.0, 0.8, 0.0]
+    velocity: [0.0, 0.0, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 1.0
+    color: [0.2, 0.2, 0.8]
+  - type: sphere
+    dyn_type: free
+    size: 0.2
+    position: [0.0, 0.0, 0.0]
+    velocity: [0.0, 0.0, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 1.0
+    color: [0.2, 0.2, 0.8]
+  - type: sphere
+    dyn_type: free
+    size: 0.2
+    position: [0.0, 1.2, 0.0]
+    velocity: [0.0, 0.0, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 1.0
+    color: [0.2, 0.2, 0.8]
+  - type: sphere
+    dyn_type: free
+    size: 0.2
+    position: [0.0, 0.4, 0.0]
+    velocity: [0.0, 0.0, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 1.0
+    color: [0.2, 0.2, 0.8]
+  - type: sphere
+    dyn_type: free
+    size: 0.2
+    position: [0.0, 3.0, 0.0]
+    velocity: [0.0, -2.0, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 10.0
+    color: [0.2, 0.2, 0.8]
