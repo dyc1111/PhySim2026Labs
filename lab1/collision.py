@@ -10,10 +10,12 @@ class Collision:
         self.restitution = c_cfg["restitution"]
         self.mu = c_cfg["mu"]
         self.max_contact = c_cfg["max_c"]
+        self.query_max_contact = self.max_contact * 200
         self.fcl_objs = [body.to_fcl() for body in self.scene.bodies]
 
         n_bodies = self.scene.num_bodies[None]
-        self.max_possible_contacts = max(1, n_bodies * (n_bodies - 1) // 2)
+        n_pairs = max(1, n_bodies * (n_bodies - 1) // 2)
+        self.max_possible_contacts = n_pairs * self.max_contact
 
         self.contact_a = ti.field(dtype=ti.i32, shape=self.max_possible_contacts)
         self.contact_b = ti.field(dtype=ti.i32, shape=self.max_possible_contacts)
@@ -33,6 +35,13 @@ class Collision:
         self.num_contacts[None] = 0
         self._resolve_contacts(0.016)
 
+    def _select_diverse_contacts(self, c_list, k):
+        if len(c_list) <= k:
+            return c_list
+        depths = np.array([float(c[4]) for c in c_list], dtype=np.float32)
+        selected = np.argsort(depths)[:k]
+        return [c_list[i] for i in selected]
+
     def get_contacts(self, idx_a, idx_b, pos, rot):
         obj_a = self.fcl_objs[idx_a]
         obj_b = self.fcl_objs[idx_b]
@@ -43,7 +52,7 @@ class Collision:
 
         # Perform collision check
         request = fcl.CollisionRequest(
-            num_max_contacts=self.max_contact, enable_contact=True
+            num_max_contacts=self.query_max_contact, enable_contact=True
         )
         result = fcl.CollisionResult()
 
@@ -69,7 +78,6 @@ class Collision:
         pos = self.scene.position.to_numpy()
         rot = self.scene.rotation.to_numpy()
 
-        # 1. Collision Detection
         contact_groups = {}
         for i in range(n_bodies):
             for j in range(i + 1, n_bodies):
@@ -77,18 +85,26 @@ class Collision:
                 if c_list:
                     contact_groups[(i, j)] = c_list
 
-        num_c = len(contact_groups)
-        if num_c == 0:
+        if not contact_groups:
             return
 
-        a_arr = np.zeros(num_c, dtype=np.int32)
-        b_arr = np.zeros(num_c, dtype=np.int32)
-        n_arr = np.zeros((num_c, 3), dtype=np.float32)
-        p_arr = np.zeros((num_c, 3), dtype=np.float32)
-        d_arr = np.zeros(num_c, dtype=np.float32)
+        total_contacts = len(contact_groups)
+        reduced_groups = {}
+        for key, c_list in contact_groups.items():
+            picked = self._select_diverse_contacts(c_list, self.max_contact)
+            reduced_groups[key] = picked
+
+        if total_contacts == 0:
+            return
+
+        a_arr = np.zeros(total_contacts, dtype=np.int32)
+        b_arr = np.zeros(total_contacts, dtype=np.int32)
+        n_arr = np.zeros((total_contacts, 3), dtype=np.float32)
+        p_arr = np.zeros((total_contacts, 3), dtype=np.float32)
+        d_arr = np.zeros(total_contacts, dtype=np.float32)
 
         idx = 0
-        for (a, b), c_list in contact_groups.items():
+        for (a, b), c_list in reduced_groups.items():
             n_avg = np.mean([np.array(c[2]) for c in c_list], axis=0)
             n_len = np.linalg.norm(n_avg)
             if n_len < 1e-6:
@@ -106,9 +122,9 @@ class Collision:
             d_arr[idx] = d_max
             idx += 1
 
-        self.num_contacts[None] = num_c
+        self.num_contacts[None] = total_contacts
 
-        pad_size = self.max_possible_contacts - num_c
+        pad_size = self.max_possible_contacts - total_contacts
         if pad_size > 0:
             a_arr = np.pad(a_arr, (0, pad_size))
             b_arr = np.pad(b_arr, (0, pad_size))
