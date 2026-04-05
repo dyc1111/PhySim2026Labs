@@ -1,7 +1,9 @@
 import numpy as np
 import fcl
+import taichi as ti
 
 
+@ti.data_oriented
 class Collision:
     def __init__(self, c_cfg, scene):
         self.scene = scene
@@ -9,6 +11,23 @@ class Collision:
         self.mu = c_cfg["mu"]
         self.max_contact = c_cfg["max_c"]
         self.fcl_objs = [body.to_fcl() for body in self.scene.bodies]
+
+        n_bodies = self.scene.num_bodies[None]
+        self.max_possible_contacts = max(1, n_bodies * (n_bodies - 1) // 2)
+
+        self.contact_a = ti.field(dtype=ti.i32, shape=self.max_possible_contacts)
+        self.contact_b = ti.field(dtype=ti.i32, shape=self.max_possible_contacts)
+        self.contact_n = ti.Vector.field(
+            3, dtype=ti.f32, shape=self.max_possible_contacts
+        )
+        self.contact_p = ti.Vector.field(
+            3, dtype=ti.f32, shape=self.max_possible_contacts
+        )
+        self.contact_d = ti.field(dtype=ti.f32, shape=self.max_possible_contacts)
+        self.num_contacts = ti.field(dtype=ti.i32, shape=())
+
+        self.delta_vel = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
+        self.delta_ang_vel = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
 
     def get_contacts(self, idx_a, idx_b, pos, rot):
         obj_a = self.fcl_objs[idx_a]
@@ -40,10 +59,11 @@ class Collision:
 
         return contacts
 
-    def detect_and_resolve(self, pos, vel, rot, ang_vel, dt):
+    def detect_and_resolve(self, dt):
         n_bodies = self.scene.num_bodies[None]
-        inv_masses = self.scene.inv_mass.to_numpy()
-        inv_inertia_body = self.scene.inv_inertia_body.to_numpy()
+
+        pos = self.scene.position.to_numpy()
+        rot = self.scene.rotation.to_numpy()
 
         # 1. Collision Detection
         contact_groups = {}
@@ -53,10 +73,17 @@ class Collision:
                 if c_list:
                     contact_groups[(i, j)] = c_list
 
-        if not contact_groups:
-            return vel, ang_vel
+        num_c = len(contact_groups)
+        if num_c == 0:
+            return
 
-        contacts = []
+        a_arr = np.zeros(num_c, dtype=np.int32)
+        b_arr = np.zeros(num_c, dtype=np.int32)
+        n_arr = np.zeros((num_c, 3), dtype=np.float32)
+        p_arr = np.zeros((num_c, 3), dtype=np.float32)
+        d_arr = np.zeros(num_c, dtype=np.float32)
+
+        idx = 0
         for (a, b), c_list in contact_groups.items():
             n_avg = np.mean([np.array(c[2]) for c in c_list], axis=0)
             n_len = np.linalg.norm(n_avg)
@@ -67,56 +94,88 @@ class Collision:
 
             p_avg = np.mean([np.array(c[3]) for c in c_list], axis=0)
             d_max = np.max([c[4] for c in c_list])
-            contacts.append((a, b, n_avg, p_avg, d_max))
 
-        delta_vel = np.zeros_like(vel)
-        delta_ang_vel = np.zeros_like(ang_vel)
+            a_arr[idx] = a
+            b_arr[idx] = b
+            n_arr[idx] = n_avg
+            p_arr[idx] = p_avg
+            d_arr[idx] = d_max
+            idx += 1
 
-        for a, b, n, p, d in contacts:
-            x_a = p - pos[a]
-            x_b = p - pos[b]
+        self.num_contacts[None] = num_c
+
+        pad_size = self.max_possible_contacts - num_c
+        if pad_size > 0:
+            a_arr = np.pad(a_arr, (0, pad_size))
+            b_arr = np.pad(b_arr, (0, pad_size))
+            n_arr = np.pad(n_arr, ((0, pad_size), (0, 0)))
+            p_arr = np.pad(p_arr, ((0, pad_size), (0, 0)))
+            d_arr = np.pad(d_arr, (0, pad_size))
+
+        self.contact_a.from_numpy(a_arr)
+        self.contact_b.from_numpy(b_arr)
+        self.contact_n.from_numpy(n_arr)
+        self.contact_p.from_numpy(p_arr)
+        self.contact_d.from_numpy(d_arr)
+
+        self._resolve_contacts(dt)
+
+    @ti.kernel
+    def _resolve_contacts(self, dt: ti.f32):  # type: ignore
+        for i in range(self.scene.num_bodies[None]):
+            self.delta_vel[i] = ti.Vector.zero(ti.f32, 3)
+            self.delta_ang_vel[i] = ti.Vector.zero(ti.f32, 3)
+
+        for i in range(self.num_contacts[None]):
+            a = self.contact_a[i]
+            b = self.contact_b[i]
+            n = self.contact_n[i]
+            p = self.contact_p[i]
+            d = self.contact_d[i]
+
+            x_a = p - self.scene.position[a]
+            x_b = p - self.scene.position[b]
 
             # Velocity of collision point on body A and B
-            v_p_a = vel[a] + np.cross(ang_vel[a], x_a)
-            v_p_b = vel[b] + np.cross(ang_vel[b], x_b)
+            v_p_a = self.scene.velocity[a] + self.scene.angular_velocity[a].cross(x_a)
+            v_p_b = self.scene.velocity[b] + self.scene.angular_velocity[b].cross(x_b)
             v_rel = v_p_a - v_p_b
-            # print(v_rel, n, num_c, d)
 
-            # Check if the two bodies are already separating
-            v_rel_n = np.dot(v_rel, n)
-            if v_rel_n >= 0:
-                continue
-            v_rel_t = v_rel - v_rel_n * n
-            t = v_rel_t / (np.linalg.norm(v_rel_t) + 1e-8)
-            v_rel_t = np.linalg.norm(v_rel_t)
+            v_rel_n = v_rel.dot(n)
+            if v_rel_n < 0:
+                v_rel_t = v_rel - v_rel_n * n
+                v_rel_t_norm = v_rel_t.norm()
+                t = ti.Vector.zero(ti.f32, 3)
+                if v_rel_t_norm > 1e-8:
+                    t = v_rel_t / v_rel_t_norm
 
-            I_inv_a = rot[a] @ inv_inertia_body[a] @ rot[a].T
-            I_inv_b = rot[b] @ inv_inertia_body[b] @ rot[b].T
+                inv_mass_a = self.scene.inv_mass[a]
+                inv_mass_b = self.scene.inv_mass[b]
 
-            # Compute angular component
-            w_a_part = np.cross(I_inv_a @ np.cross(x_a, n), x_a)
-            w_b_part = np.cross(I_inv_b @ np.cross(x_b, n), x_b)
+                rot_a = self.scene.rotation[a]
+                rot_b = self.scene.rotation[b]
+                I_inv_a = rot_a @ self.scene.inv_inertia_body[a] @ rot_a.transpose()
+                I_inv_b = rot_b @ self.scene.inv_inertia_body[b] @ rot_b.transpose()
 
-            denom = inv_masses[a] + inv_masses[b] + np.dot(w_a_part + w_b_part, n)
+                w_a_part = (I_inv_a @ (x_a.cross(n))).cross(x_a)
+                w_b_part = (I_inv_b @ (x_b.cross(n))).cross(x_b)
 
-            # Using Baumgarte Stabilization
-            bias = (0.2 / dt) * max(d - 0.005, 0.0)
+                denom = inv_mass_a + inv_mass_b + (w_a_part + w_b_part).dot(n)
 
-            # Compute impulse and scale by num_c to avoid over-correction
-            Jn = (-(1.0 + self.restitution) * v_rel_n + bias) / denom
-            Jt_target = -v_rel_t / denom
-            Jt = np.clip(Jt_target, -self.mu * Jn, self.mu * Jn)
-            J = Jn * n + Jt * t
+                bias = (0.2 / dt) * ti.max(d - 0.005, 0.0)
 
-            # Apply linear impulse
-            delta_vel[a] += J * inv_masses[a]
-            delta_vel[b] -= J * inv_masses[b]
+                Jn = (-(1.0 + self.restitution) * v_rel_n + bias) / denom
+                Jt_target = -(v_rel_t_norm / denom)
+                Jt = ti.max(-self.mu * Jn, ti.min(self.mu * Jn, Jt_target))
 
-            # Apply angular impulse
-            delta_ang_vel[a] += I_inv_a @ np.cross(x_a, J)
-            delta_ang_vel[b] -= I_inv_b @ np.cross(x_b, J)
+                J = Jn * n + Jt * t
 
-        vel += delta_vel
-        ang_vel += delta_ang_vel
+                self.delta_vel[a] += J * inv_mass_a
+                self.delta_vel[b] -= J * inv_mass_b
 
-        return vel, ang_vel
+                self.delta_ang_vel[a] += I_inv_a @ (x_a.cross(J))
+                self.delta_ang_vel[b] -= I_inv_b @ (x_b.cross(J))
+
+        for i in range(self.scene.num_bodies[None]):
+            self.scene.velocity[i] += self.delta_vel[i]
+            self.scene.angular_velocity[i] += self.delta_ang_vel[i]

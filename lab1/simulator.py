@@ -44,13 +44,9 @@ class Simulator:
             self.scene.pre_solve_kinematics(dt, applied_forces, applied_torques)
 
             # 2. collision detection & resolution
-            pos, vel, rot, ang_vel = self.scene.get_state()
-            vel, ang_vel = self.collision_solver.detect_and_resolve(
-                pos, vel, rot, ang_vel, dt
-            )
+            self.collision_solver.detect_and_resolve(dt)
 
             # 3. update pos and rot
-            self.scene.set_velocities(vel, ang_vel)
             self.scene.post_solve_kinematics(dt)
 
         self.scene.update_mesh_vertices()

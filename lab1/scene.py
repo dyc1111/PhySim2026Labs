@@ -83,17 +83,6 @@ class Scene:
 
         self.update_mesh_vertices()
 
-    def get_state(self):
-        pos = self.position.to_numpy().copy()
-        vel = self.velocity.to_numpy().copy()
-        rot = self.rotation.to_numpy().copy()
-        ang_vel = self.angular_velocity.to_numpy().copy()
-        return pos, vel, rot, ang_vel
-
-    def set_velocities(self, vel, ang_vel):
-        self.velocity.from_numpy(vel)
-        self.angular_velocity.from_numpy(ang_vel)
-
     @ti.func
     def _get_skew_symmetric(self, v: ti.template()):  # type: ignore
         return ti.Matrix([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
