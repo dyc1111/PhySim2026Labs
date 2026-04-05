@@ -1,0 +1,19 @@
+gravity: [0.0, -9.8, 0.0]
+objects:
+  - type: custom
+    file_path: "assets/cell_phone.stl"
+    convexify: False
+    dyn_type: free
+    size: 10.0
+    position: [0.0, 1.0, 0.0]
+    velocity: [0.0, 0.0, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 6.0
+    color: [0.2, 0.2, 0.8]
+  - type: cuboid
+    dyn_type: freeze
+    size: [10.0, 0.01, 10.0]
+    rotation_deg: [0.0, 0.0, 0.0]
+    position: [0.0, -0.005, 0.0]
+    color: [0.8, 0.8, 0.8]

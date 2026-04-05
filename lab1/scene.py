@@ -1,6 +1,6 @@
 import taichi as ti
 import numpy as np
-from rigidbody import Cuboid, Sphere, Cylinder
+from rigidbody import Cuboid, Sphere, Cylinder, Custom
 
 
 @ti.data_oriented
@@ -18,6 +18,8 @@ class Scene:
                 self.bodies.append(Sphere(cfg))
             elif body_type == "cylinder":
                 self.bodies.append(Cylinder(cfg))
+            elif body_type == "custom":
+                self.bodies.append(Custom(cfg))
             else:
                 raise NotImplementedError(f"Unsupported body type: {body_type}")
 
@@ -140,3 +142,10 @@ class Scene:
         self.velocity.copy_from(self.init_vel)
         self.rotation.copy_from(self.init_rot)
         self.angular_velocity.copy_from(self.init_ang_vel)
+
+    def get_state(self):
+        pos = self.position.to_numpy()
+        vel = self.velocity.to_numpy()
+        rot = self.rotation.to_numpy()
+        ang_vel = self.angular_velocity.to_numpy()
+        return pos, vel, rot, ang_vel

@@ -27,27 +27,33 @@ objects:
     angular_velocity: [0.0, 0.0, 0.0]
     mass: 3.0
     color: [0.2, 0.2, 0.8]
-  - type: cuboid
+  - type: custom
+    file_path: "assets/bunny.stl"
+    convexify: False
     dyn_type: free
-    size: [0.8, 0.8, 0.6]
+    size: [10.0, 10.0, 10.0]
     position: [2.0, 0.6, 0.0]
     velocity: [-10.0, 5.0, 0.0]
     rotation_deg: [0.0, 0.0, 0.0]
     angular_velocity: [0.0, 0.0, 5.0]
     mass: 4.0
     color: [0.8, 0.2, 0.8]
-  - type: sphere
+  - type: custom
     dyn_type: free
-    size: 0.2
+    file_path: "assets/foam_brick.stl"
+    convexify: False
+    size: [10.0, 10.0, 10.0]
     position: [-2.0, 0.9, 0.0]
     velocity: [10.0, 5.0, 0.0]
     rotation_deg: [0.0, 0.0, 0.0]
     angular_velocity: [0.0, 0.0, 5.0]
     mass: 5.0
     color: [0.8, 0.8, 0.2]
-  - type: cylinder
+  - type: custom
     dyn_type: free
-    size: [0.6, 0.8]
+    file_path: "assets/water_bottle.stl"
+    convexify: True
+    size: [5.0, 5.0, 5.0]
     position: [0.0, 1.5, 2.0]
     velocity: [0.0, 5.0, -10.0]
     rotation_deg: [0.0, 0.0, 0.0]

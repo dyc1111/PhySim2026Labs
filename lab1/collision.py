@@ -29,6 +29,10 @@ class Collision:
         self.delta_vel = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
         self.delta_ang_vel = ti.Vector.field(3, dtype=ti.f32, shape=n_bodies)
 
+        # Force JIT compilation of the collision kernel to prevent stutter on first impact
+        self.num_contacts[None] = 0
+        self._resolve_contacts(0.016)
+
     def get_contacts(self, idx_a, idx_b, pos, rot):
         obj_a = self.fcl_objs[idx_a]
         obj_b = self.fcl_objs[idx_b]

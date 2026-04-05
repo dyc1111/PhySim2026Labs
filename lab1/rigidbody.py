@@ -1,6 +1,7 @@
 import numpy as np
 import taichi as ti
 import fcl
+import trimesh
 from constants import *
 from util import (
     euler_angle_to_matrix,
@@ -276,7 +277,11 @@ class Cylinder(RigidBody):
     @classmethod
     @ti.kernel
     def _setup_mesh(
-        cls, indices_field: ti.template(), i_offset: ti.i32, v_offset: ti.i32, n_idx: ti.i32  # type: ignore
+        cls,
+        indices_field: ti.template(),  # type: ignore
+        i_offset: ti.i32,  # type: ignore
+        v_offset: ti.i32,  # type: ignore
+        n_idx: ti.i32,  # type: ignore
     ):
         for i in range(n_idx):
             indices_field[i_offset + i] = v_offset + cls.indices[i]
@@ -316,3 +321,113 @@ class Cylinder(RigidBody):
             local = ti.Vector([lv[0] * radius, lv[1] * radius, lv[2] * height])
             world = rot @ local + pos
             vertices_field[v_offset + k] = world
+
+
+@ti.data_oriented
+class Custom(RigidBody):
+    def __init__(self, cfg):
+        super().__init__(cfg)
+        file_path = cfg["file_path"]
+        scale = cfg["size"]
+        convexify = cfg["convexify"]
+
+        mesh = trimesh.load(file_path, force="mesh")
+        mesh.apply_scale(scale)
+
+        if convexify:
+            mesh = mesh.convex_hull
+
+        # Center the mesh at its center of mass
+        mesh.vertices -= mesh.center_mass
+
+        self.mesh_data = mesh
+        self._vertex_count = len(mesh.vertices)
+        self._index_count = len(mesh.faces) * 3
+
+        self.local_verts = ti.Vector.field(3, dtype=ti.f32, shape=self._vertex_count)
+        self.indices = ti.field(dtype=ti.i32, shape=self._index_count)
+
+        self.local_verts.from_numpy(mesh.vertices.astype(np.float32))
+        self.indices.from_numpy(mesh.faces.flatten().astype(np.int32))
+
+        self.half_extent = np.max(np.abs(mesh.vertices), axis=0).astype(np.float32)
+
+        if mesh.is_volume:
+            self.base_inertia = mesh.moment_inertia.copy()
+            self.base_mass = max(mesh.mass, 1e-8)
+        else:
+            # Fallback to an AABB box inertia for unclosed/thin wrapper meshes
+            lx, ly, lz = self.half_extent * 2.0
+            ixx = (1.0 / 12.0) * (ly * ly + lz * lz)
+            iyy = (1.0 / 12.0) * (lx * lx + lz * lz)
+            izz = (1.0 / 12.0) * (lx * lx + ly * ly)
+            self.base_inertia = np.diag([ixx, iyy, izz])
+            self.base_mass = 1.0
+
+    @property
+    def vertex_count(self):
+        return self._vertex_count
+
+    @property
+    def index_count(self):
+        return self._index_count
+
+    def get_inertia_diag(self):
+        if self.dyn_type == "freeze":
+            return np.zeros(3, dtype=np.float32)
+        # Base trimesh inertia relies on mesh.mass (which depends on density=1.0)
+        # We scale it to match the configured mass.
+        I = self.base_inertia * (self.mass / self.base_mass)
+        return np.array([I[0, 0], I[1, 1], I[2, 2]], dtype=np.float32)
+
+    def to_fcl(self):
+        verts = self.mesh_data.vertices
+        faces = self.mesh_data.faces
+        bvh = fcl.BVHModel()
+        bvh.beginModel(len(verts), len(faces))
+        bvh.addSubModel(verts, faces)
+        bvh.endModel()
+        tf = fcl.Transform()
+        return fcl.CollisionObject(bvh, tf)
+
+    def ray_intersect(self, orig_l, dir_l):
+        if self.dyn_type == "freeze":
+            return False, 0.0, np.zeros(3)
+        # Use fast AABB intersection on CPU for real-time mouse picking raycasts
+        return ray_aabb_intersect(orig_l, dir_l, self.half_extent)
+
+    def setup_mesh(self, indices_field, i_offset, v_offset):
+        self._setup_mesh(indices_field, i_offset, v_offset, self.index_count)
+
+    @ti.kernel
+    def _setup_mesh(
+        self,
+        indices_field: ti.template(),  # type: ignore
+        i_offset: ti.i32,  # type: ignore
+        v_offset: ti.i32,  # type: ignore
+        n_idx: ti.i32,  # type: ignore
+    ):
+        for i in range(n_idx):
+            indices_field[i_offset + i] = self.indices[i] + v_offset
+
+    def update_mesh_vertices(
+        self, pos_field, rot_field, body_id, vertices_field, v_offset
+    ):
+        self._update_mesh_vertices(
+            pos_field, rot_field, body_id, vertices_field, v_offset, self.vertex_count
+        )
+
+    @ti.kernel
+    def _update_mesh_vertices(
+        self,
+        pos_field: ti.template(),  # type: ignore
+        rot_field: ti.template(),  # type: ignore
+        body_id: ti.i32,  # type: ignore
+        vertices_field: ti.template(),  # type: ignore
+        v_offset: ti.i32,  # type: ignore
+        n_verts: ti.i32,  # type: ignore
+    ):
+        pos = pos_field[body_id]
+        rot = rot_field[body_id]
+        for k in range(n_verts):
+            vertices_field[v_offset + k] = rot @ self.local_verts[k] + pos
