@@ -67,7 +67,7 @@ class Collision:
 
         return contacts
 
-    def detect_contacts(self, max_keep=None):
+    def detect(self):
         n_bodies = self.scene.num_bodies[None]
         pos = self.scene.position.to_numpy()
         rot = self.scene.rotation.to_numpy()

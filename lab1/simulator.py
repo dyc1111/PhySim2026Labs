@@ -97,67 +97,34 @@ class ImpulseSimulator(BaseSimulator):
 class ConstraintSimulator(BaseSimulator):
     def __init__(self, sim_cfg, scene: Scene):
         super().__init__(sim_cfg, scene)
-
-        self.mu = float(sim_cfg["collision"]["mu"])
-        self.restitution = float(sim_cfg["collision"]["restitution"])
-
-        self.constraint_cfg = sim_cfg.get("constraint", {})
-        self.baumgarte_beta = float(self.constraint_cfg.get("baumgarte_beta", 0.2))
-        self.penetration_slop = float(
-            self.constraint_cfg.get("penetration_slop", 0.005)
-        )
+        self.mu = self.collision.mu
+        self.restitution = self.collision.restitution
+        self.solver = sim_cfg["solver"]
+        self.R = sim_cfg["R"]
+        self.beta = sim_cfg["beta"]
+        self.slop = sim_cfg["slop"]
 
     def _solve_ccp(self, G, g, n_contacts):
         dim = 3 * n_contacts
 
-        # Convert G to a symmetric matrix
-        G = 0.5 * (G + G.T)
+        # Convert G to a psd matrix
+        G = cp.psd_wrap(G)
         # Add a regularizer to make the CCP strongly convex.
-        G_reg = G + 1e-6 * np.eye(dim, dtype=np.float32)
+        G_reg = G + self.R * np.eye(dim, dtype=np.float32)
 
+        # Solve the CCP problem using self.solver
         lam = cp.Variable(dim)
-        objective = (
-            0.5 * cp.quad_form(lam, G_reg.astype(np.float64))
-            + g.astype(np.float64) @ lam
-        )
-
+        objective = 0.5 * cp.quad_form(lam, G_reg) + g.astype(np.float64) @ lam
         constraints = []
         for i in range(n_contacts):
             lam_n = lam[3 * i]
             lam_t = lam[3 * i + 1 : 3 * i + 3]
             constraints.append(lam_n >= 0.0)
             constraints.append(cp.SOC(self.mu * lam_n, lam_t))
-
         prob = cp.Problem(cp.Minimize(objective), constraints)
-
-        solver_name = str(self.constraint_cfg.get("solver", "SCS")).upper()
-        eps = float(self.constraint_cfg.get("eps", 1e-4))
-        max_iters = int(self.constraint_cfg.get("max_iters", 2500))
-
-        solve_kwargs = {"warm_start": True, "verbose": False}
-        if solver_name == "ECOS":
-            solve_kwargs.update(
-                {
-                    "solver": cp.ECOS,
-                    "abstol": eps,
-                    "reltol": eps,
-                    "feastol": eps,
-                    "max_iters": max_iters,
-                }
-            )
-        else:
-            solve_kwargs.update({"solver": cp.SCS, "eps": eps, "max_iters": max_iters})
-
-        try:
-            prob.solve(**solve_kwargs)
-        except Exception:
-            return np.zeros(dim, dtype=np.float32)
-
-        if lam.value is None:
-            return np.zeros(dim, dtype=np.float32)
+        prob.solve(solver=self.solver)
 
         lam_np = np.asarray(lam.value, dtype=np.float32).reshape(-1)
-        lam_np = np.where(np.isfinite(lam_np), lam_np, 0.0)
         return lam_np
 
     def _step(self, applied_forces=None, applied_torques=None):
@@ -173,9 +140,7 @@ class ConstraintSimulator(BaseSimulator):
             self.scene.pre_solve_kinematics(dt, applied_forces, applied_torques)
 
             # 2) Contact detection and CCP solve.
-            contacts = self.collision.detect_contacts(
-                max_keep=self.collision.max_contact
-            )
+            contacts = self.collision.detect()
             if contacts:
                 J = self.scene.calc_jacobian(contacts)
                 M_inv = self.scene.calc_mass_inverse_matrix()
@@ -188,15 +153,11 @@ class ConstraintSimulator(BaseSimulator):
                     depth = float(c[4])
                     v_rel_n = g[3 * i]
                     v_target_n = v_rel_n + self.restitution * min(v_rel_n, 0.0)
-                    bias = (self.baumgarte_beta / dt) * max(
-                        depth - self.penetration_slop, 0.0
-                    )
+                    bias = (self.beta / dt) * max(depth - self.slop, 0.0)
                     g[3 * i] = v_target_n - bias
 
                 lam = self._solve_ccp(G, g, len(contacts))
-                delta_v = M_inv @ (J.T @ lam)
-                v_next = v_free + delta_v
-                self.scene.set_generalized_velocity(v_next)
+                self.scene.set_generalized_velocity(v_free + M_inv @ (J.T @ lam))
 
             # 3) Integrate positions and rotations from resolved velocities.
             self.scene.post_solve_kinematics(dt)

@@ -2,14 +2,11 @@ type: constraint
 dt: 0.0041666667
 steps: -1
 substeps: 4
+solver: CLARABEL  # SCS or CLARABEL
+R: 1e-6
+beta: 0.2
+slop: 0.005
 collision:
   restitution: 0.5
   mu: 0.5
   max_c: 5
-constraint:
-  solver: SCS
-  max_iters: 2500
-  eps: 1.0e-4
-  regularization: 1.0e-6
-  baumgarte_beta: 0.2
-  penetration_slop: 0.005
