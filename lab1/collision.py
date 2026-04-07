@@ -35,6 +35,10 @@ class Collision:
         self.num_contacts[None] = 0
         self._resolve_contacts(0.016)
 
+    def _is_filtered_pair(self, idx_a, idx_b):
+        pair = (idx_a, idx_b) if idx_a < idx_b else (idx_b, idx_a)
+        return pair in self.scene.parent_child_pairs
+
     def _select_contacts(self, c_list, k):
         if len(c_list) <= k:
             return c_list
@@ -75,6 +79,8 @@ class Collision:
         contacts = []
         for i in range(n_bodies):
             for j in range(i + 1, n_bodies):
+                if self._is_filtered_pair(i, j):
+                    continue
                 c_list = self.get_contacts(i, j, pos, rot)
                 if not c_list:
                     continue
@@ -91,6 +97,8 @@ class Collision:
         contact_groups = {}
         for i in range(n_bodies):
             for j in range(i + 1, n_bodies):
+                if self._is_filtered_pair(i, j):
+                    continue
                 c_list = self.get_contacts(i, j, pos, rot)
                 if c_list:
                     contact_groups[(i, j)] = c_list

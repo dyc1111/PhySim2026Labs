@@ -20,7 +20,7 @@ def main(cfg):
     elif sim_type == "impulse":
         simulator = ImpulseSimulator(sim_cfg, scene)
     else:
-        raise ValueError(f"Unsupported simulator type: {sim_type}")
+        raise NotImplementedError(f"Unsupported simulator type: {sim_type}")
 
     simulator.run()
 

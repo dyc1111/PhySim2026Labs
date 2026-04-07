@@ -63,6 +63,7 @@ class RigidBody:
 
 @ti.data_oriented
 class Cuboid(RigidBody):
+    type_name = "cuboid"
     vertex_count = 8
     index_count = 36
 
@@ -148,6 +149,7 @@ class Cuboid(RigidBody):
 
 @ti.data_oriented
 class Sphere(RigidBody):
+    type_name = "sphere"
     _is_initialized = False
 
     @classmethod
@@ -236,6 +238,7 @@ class Sphere(RigidBody):
 
 @ti.data_oriented
 class Cylinder(RigidBody):
+    type_name = "cylindar"
     _is_initialized = False
 
     @classmethod
@@ -332,6 +335,8 @@ class Cylinder(RigidBody):
 
 @ti.data_oriented
 class Custom(RigidBody):
+    type_name = "custom"
+
     def __init__(self, cfg):
         super().__init__(cfg)
         file_path = cfg["file_path"]
@@ -438,3 +443,20 @@ class Custom(RigidBody):
         rot = rot_field[body_id]
         for k in range(n_verts):
             vertices_field[v_offset + k] = rot @ self.local_verts[k] + pos
+
+
+RIGIDBODY_TYPE_TO_CLASS = {
+    Cuboid.type_name: Cuboid,
+    Sphere.type_name: Sphere,
+    Cylinder.type_name: Cylinder,
+    Custom.type_name: Custom,
+}
+
+
+def is_rigidbody_type(type_name):
+    return type_name in RIGIDBODY_TYPE_TO_CLASS
+
+
+def create_rigid_body(cfg) -> RigidBody:
+    body_type = cfg["type"]
+    return RIGIDBODY_TYPE_TO_CLASS[body_type](cfg)

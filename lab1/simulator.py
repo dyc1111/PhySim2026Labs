@@ -77,6 +77,9 @@ class BaseSimulator:
 class ImpulseSimulator(BaseSimulator):
     def __init__(self, sim_cfg, scene: Scene):
         super().__init__(sim_cfg, scene)
+        assert (
+            len(scene.articulated_bodies) == 0
+        ), "use constraint-based simulator for articulated bodies"
 
     def _step(self, applied_forces=None, applied_torques=None):
         dt = self.dt / self.substeps
@@ -103,28 +106,37 @@ class ConstraintSimulator(BaseSimulator):
         self.R = sim_cfg["R"]
         self.beta = sim_cfg["beta"]
         self.slop = sim_cfg["slop"]
+        self.joint_beta = sim_cfg["joint_beta"]
 
-    def _solve_ccp(self, G, g, n_contacts):
-        dim = 3 * n_contacts
+    def _solve_ccp(self, G, g, n_contacts, equality_A=None, equality_b=None):
+        dim = g.shape[0]
 
         # Convert G to a psd matrix
         G = cp.psd_wrap(G)
         # Add a regularizer to make the CCP strongly convex.
         G_reg = G + self.R * np.eye(dim, dtype=np.float32)
 
-        # Solve the CCP problem using self.solver
+        # Set up the optimization problem
         lam = cp.Variable(dim)
         objective = 0.5 * cp.quad_form(lam, G_reg) + g.astype(np.float64) @ lam
         constraints = []
+        # contact cone constraints
         for i in range(n_contacts):
             lam_n = lam[3 * i]
             lam_t = lam[3 * i + 1 : 3 * i + 3]
             constraints.append(lam_n >= 0.0)
             constraints.append(cp.SOC(self.mu * lam_n, lam_t))
+        # joint equality constraints
+        if equality_A is not None and equality_b is not None:
+            constraints.append(
+                equality_A.astype(np.float64) @ lam == equality_b.astype(np.float64)
+            )
+
+        # solve the problem using self.solver
         prob = cp.Problem(cp.Minimize(objective), constraints)
         prob.solve(solver=self.solver)
 
-        lam_np = np.asarray(lam.value, dtype=np.float32).reshape(-1)
+        lam_np = np.asarray(lam.value, dtype=np.float32)
         return lam_np
 
     def _step(self, applied_forces=None, applied_torques=None):
@@ -141,8 +153,10 @@ class ConstraintSimulator(BaseSimulator):
 
             # 2) Contact detection and CCP solve.
             contacts = self.collision.detect()
-            if contacts:
-                J = self.scene.calc_jacobian(contacts)
+            J_contact = self.scene.calc_jacobian(contacts)
+            J_joint, rhs_joint = self.scene.calc_joint_jacobian(dt, self.joint_beta)
+            J = np.vstack([J_contact, J_joint])
+            if J.shape[0] != 0:
                 M_inv = self.scene.calc_mass_inverse_matrix()
                 v_free = self.scene.get_generalized_velocity()
 
@@ -156,7 +170,14 @@ class ConstraintSimulator(BaseSimulator):
                     bias = (self.beta / dt) * max(depth - self.slop, 0.0)
                     g[3 * i] = v_target_n - bias
 
-                lam = self._solve_ccp(G, g, len(contacts))
+                equality_A = None
+                equality_b = None
+                contact_rows = J_contact.shape[0]
+                if J_joint.shape[0] > 0:
+                    equality_A = G[contact_rows:, :]
+                    equality_b = rhs_joint - g[contact_rows:]
+
+                lam = self._solve_ccp(G, g, len(contacts), equality_A, equality_b)
                 self.scene.set_generalized_velocity(v_free + M_inv @ (J.T @ lam))
 
             # 3) Integrate positions and rotations from resolved velocities.

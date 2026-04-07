@@ -1,6 +1,7 @@
 import taichi as ti
 import numpy as np
-from rigidbody import Cuboid, Sphere, Cylinder, Custom
+from rigidbody import create_rigid_body, is_rigidbody_type
+from articulated import create_articulated_body, is_articulated_type
 from util import compute_tangent_basis
 
 
@@ -11,18 +12,35 @@ class Scene:
         objects = scene_cfg["objects"]
 
         self.bodies = []
+        self.articulated_bodies = []
+        self.joint_constraints = []
+        self.parent_child_pairs = set()
+        body_to_articulation = []
         for cfg in objects:
             body_type = cfg["type"]
-            if body_type == "cuboid":
-                self.bodies.append(Cuboid(cfg))
-            elif body_type == "sphere":
-                self.bodies.append(Sphere(cfg))
-            elif body_type == "cylinder":
-                self.bodies.append(Cylinder(cfg))
-            elif body_type == "custom":
-                self.bodies.append(Custom(cfg))
+            if is_articulated_type(body_type):
+                articulation = create_articulated_body(cfg)
+                art_id = len(self.articulated_bodies)
+                self.articulated_bodies.append(articulation)
+
+                link_ids = []
+                for link_body in articulation.links:
+                    link_ids.append(len(self.bodies))
+                    self.bodies.append(link_body)
+                    body_to_articulation.append(art_id)
+
+                for constraint in articulation.get_joint_constraints(link_ids):
+                    self.joint_constraints.append(constraint)
+                    pair = tuple(sorted((constraint["parent"], constraint["child"])))
+                    self.parent_child_pairs.add(pair)
+            elif is_rigidbody_type(body_type):
+                body = create_rigid_body(cfg)
+                self.bodies.append(body)
+                body_to_articulation.append(-1)
             else:
                 raise NotImplementedError(f"Unsupported body type: {body_type}")
+
+        self.body_to_articulation = np.array(body_to_articulation, dtype=np.int32)
 
         self.num_bodies = ti.field(dtype=ti.i32, shape=())
         n_bodies = len(self.bodies)
@@ -136,6 +154,73 @@ class Scene:
             M_inv[6 * i + 3 : 6 * i + 6, 6 * i + 3 : 6 * i + 6] = I_inv_world
 
         return M_inv
+
+    def calc_joint_jacobian(self, dt, beta):
+        n_bodies = self.num_bodies[None]
+        n_joint_constraints = len(self.joint_constraints)
+        if n_joint_constraints == 0:
+            return (
+                np.zeros((0, 6 * n_bodies), dtype=np.float32),
+                np.zeros((0,), dtype=np.float32),
+            )
+
+        pos = self.position.to_numpy()
+        rot = self.rotation.to_numpy()
+        axes = np.eye(3, dtype=np.float32)
+        stabilization = (float(beta) / float(dt)) if dt > 1e-8 else 0.0
+
+        rows = []
+        rhs = []
+
+        for joint in self.joint_constraints:
+            a = int(joint["parent"])
+            b = int(joint["child"])
+
+            anchor_parent_local = np.array(
+                joint["anchor_parent_local"], dtype=np.float32
+            )
+            anchor_child_local = np.array(joint["anchor_child_local"], dtype=np.float32)
+
+            r_a = rot[a] @ anchor_parent_local
+            r_b = rot[b] @ anchor_child_local
+            p_a = pos[a] + r_a
+            p_b = pos[b] + r_b
+            pos_error = p_a - p_b
+
+            for direction in axes:
+                row = np.zeros((6 * n_bodies,), dtype=np.float32)
+                row[6 * a : 6 * a + 6] = self.bodies[a].calc_jacobian(
+                    r_a, direction, 1.0
+                )
+                row[6 * b : 6 * b + 6] = self.bodies[b].calc_jacobian(
+                    r_b, direction, -1.0
+                )
+                rows.append(row)
+                rhs.append(-stabilization * float(np.dot(pos_error, direction)))
+
+            if joint["joint_type"] == "revolute":
+                axis_parent = rot[a] @ np.array(
+                    joint["axis_parent_local"], dtype=np.float32
+                )
+                axis_child = rot[b] @ np.array(
+                    joint["axis_child_local"], dtype=np.float32
+                )
+                axis_parent = axis_parent / (np.linalg.norm(axis_parent) + 1e-8)
+                axis_child = axis_child / (np.linalg.norm(axis_child) + 1e-8)
+
+                t1, t2 = compute_tangent_basis(axis_parent)
+                axis_error = np.cross(axis_parent, axis_child)
+
+                for tangent in (t1, t2):
+                    row = np.zeros((6 * n_bodies,), dtype=np.float32)
+                    row[6 * a + 3 : 6 * a + 6] = tangent
+                    row[6 * b + 3 : 6 * b + 6] = -tangent
+                    rows.append(row)
+                    rhs.append(-stabilization * float(np.dot(axis_error, tangent)))
+
+        J_joint = np.stack(rows, axis=0).astype(np.float32)
+        rhs_joint = np.array(rhs, dtype=np.float32)
+        return J_joint, rhs_joint
 
     def get_generalized_velocity(self):
         vel = self.velocity.to_numpy()
