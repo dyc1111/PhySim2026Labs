@@ -52,7 +52,7 @@ objects:
   - type: custom
     dyn_type: free
     file_path: "assets/water_bottle.stl"
-    convexify: True
+    convexify: False
     size: [5.0, 5.0, 5.0]
     position: [0.0, 1.5, 2.0]
     velocity: [0.0, 5.0, -10.0]

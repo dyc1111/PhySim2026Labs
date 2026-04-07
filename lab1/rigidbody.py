@@ -53,6 +53,13 @@ class RigidBody:
     def ray_intersect(self, orig_l, dir_l):
         raise NotImplementedError
 
+    def calc_jacobian(self, r_world, direction_world, sign):
+        d = np.array(direction_world, dtype=np.float32)
+        r = np.array(r_world, dtype=np.float32)
+        linear = sign * d
+        angular = sign * np.cross(r, d)
+        return np.concatenate([linear, angular]).astype(np.float32)
+
 
 @ti.data_oriented
 class Cuboid(RigidBody):

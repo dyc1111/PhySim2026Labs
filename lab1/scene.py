@@ -1,6 +1,7 @@
 import taichi as ti
 import numpy as np
 from rigidbody import Cuboid, Sphere, Cylinder, Custom
+from util import compute_tangent_basis
 
 
 @ti.data_oriented
@@ -88,6 +89,73 @@ class Scene:
     @ti.func
     def _get_skew_symmetric(self, v: ti.template()):  # type: ignore
         return ti.Matrix([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+
+    def calc_jacobian(self, contacts):
+        n_bodies = self.num_bodies[None]
+        n_contacts = len(contacts)
+        if n_contacts == 0:
+            return np.zeros((0, 6 * n_bodies), dtype=np.float32)
+
+        pos = self.position.to_numpy()
+        J = np.zeros((3 * n_contacts, 6 * n_bodies), dtype=np.float32)
+
+        for i, c in enumerate(contacts):
+            a, b, n, p, _ = c
+            n = np.array(n, dtype=np.float32)
+            n = n / (np.linalg.norm(n) + 1e-8)
+            t1, t2 = compute_tangent_basis(n)
+            directions = (n, t1, t2)
+
+            p_w = np.array(p, dtype=np.float32)
+            r_a = p_w - pos[a]
+            r_b = p_w - pos[b]
+
+            for j, direction in enumerate(directions):
+                row = 3 * i + j
+                J[row, 6 * a : 6 * a + 6] = self.bodies[a].calc_jacobian(
+                    r_a, direction, 1.0
+                )
+                J[row, 6 * b : 6 * b + 6] = self.bodies[b].calc_jacobian(
+                    r_b, direction, -1.0
+                )
+
+        return J
+
+    def calc_mass_inverse_matrix(self):
+        n_bodies = self.num_bodies[None]
+        rot = self.rotation.to_numpy()
+        inv_mass = self.inv_mass.to_numpy()
+        inv_inertia_body = self.inv_inertia_body.to_numpy()
+
+        M_inv = np.zeros((6 * n_bodies, 6 * n_bodies), dtype=np.float32)
+        for i in range(n_bodies):
+            M_inv[6 * i : 6 * i + 3, 6 * i : 6 * i + 3] = inv_mass[i] * np.eye(
+                3, dtype=np.float32
+            )
+            I_inv_world = rot[i] @ inv_inertia_body[i] @ rot[i].T
+            M_inv[6 * i + 3 : 6 * i + 6, 6 * i + 3 : 6 * i + 6] = I_inv_world
+
+        return M_inv
+
+    def get_generalized_velocity(self):
+        vel = self.velocity.to_numpy()
+        ang_vel = self.angular_velocity.to_numpy()
+        n_bodies = self.num_bodies[None]
+        v = np.zeros(6 * n_bodies, dtype=np.float32)
+        for i in range(n_bodies):
+            v[6 * i : 6 * i + 3] = vel[i]
+            v[6 * i + 3 : 6 * i + 6] = ang_vel[i]
+        return v
+
+    def set_generalized_velocity(self, v_generalized):
+        n_bodies = self.num_bodies[None]
+        vel = np.zeros((n_bodies, 3), dtype=np.float32)
+        ang_vel = np.zeros((n_bodies, 3), dtype=np.float32)
+        for i in range(n_bodies):
+            vel[i] = v_generalized[6 * i : 6 * i + 3]
+            ang_vel[i] = v_generalized[6 * i + 3 : 6 * i + 6]
+        self.velocity.from_numpy(vel)
+        self.angular_velocity.from_numpy(ang_vel)
 
     @ti.kernel
     def pre_solve_kinematics(

@@ -14,11 +14,28 @@ def euler_angle_to_matrix(rot_deg):
     return rz_m @ ry_m @ rx_m
 
 
-def skew_symmetric(v):
-    return np.array(
-        [[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]],
-        dtype=np.float32,
-    )
+def compute_tangent_basis(n):
+    n = np.array(n, dtype=np.float32)
+    n_norm = np.linalg.norm(n)
+    if n_norm < 1e-8:
+        n = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    else:
+        n = n / n_norm
+
+    ref = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    if abs(n[0]) > 0.9:
+        ref = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+
+    t1 = np.cross(n, ref)
+    t1_norm = np.linalg.norm(t1)
+    if t1_norm < 1e-8:
+        ref = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        t1 = np.cross(n, ref)
+        t1_norm = np.linalg.norm(t1)
+    t1 = t1 / (t1_norm + 1e-8)
+    t2 = np.cross(n, t1)
+    t2 = t2 / (np.linalg.norm(t2) + 1e-8)
+    return t1.astype(np.float32), t2.astype(np.float32)
 
 
 def get_camera_ray_dir(u, v, cam_pos, cam_lookat, cam_up, fov_deg=45.0, aspect=1.0):
@@ -78,25 +95,26 @@ def ray_aabb_intersect(orig, dir, half_ext):
 
     return True, t_min if t_min > 0 else t_max, hit_normal
 
+
 def ray_sphere_intersect(orig, dir, radius):
     a = np.dot(dir, dir)
     b = 2.0 * np.dot(orig, dir)
     c = np.dot(orig, orig) - radius * radius
-    
-    discriminant = b*b - 4*a*c
+
+    discriminant = b * b - 4 * a * c
     if discriminant < 0:
         return False, 0.0, np.zeros(3)
-        
+
     sqrt_disc = np.sqrt(discriminant)
     t0 = (-b - sqrt_disc) / (2.0 * a)
     t1 = (-b + sqrt_disc) / (2.0 * a)
-    
+
     if t0 > t1:
         t0, t1 = t1, t0
-        
+
     if t1 < 0.0:
         return False, 0.0, np.zeros(3)
-        
+
     t = t0 if t0 > 0 else t1
     hit_pos = orig + t * dir
     hit_normal = hit_pos / radius
@@ -104,32 +122,34 @@ def ray_sphere_intersect(orig, dir, radius):
 
 
 def ray_cylinder_intersect(orig, dir, radius, height):
-    a = dir[0]**2 + dir[1]**2
-    b = 2.0 * (orig[0]*dir[0] + orig[1]*dir[1])
-    c = orig[0]**2 + orig[1]**2 - radius**2
-    
+    a = dir[0] ** 2 + dir[1] ** 2
+    b = 2.0 * (orig[0] * dir[0] + orig[1] * dir[1])
+    c = orig[0] ** 2 + orig[1] ** 2 - radius**2
+
     t_min = np.inf
     hit_normal = np.zeros(3)
     hit = False
-    
+
     if a > 1e-8:
-        discriminant = b**2 - 4*a*c
+        discriminant = b**2 - 4 * a * c
         if discriminant >= 0:
             sqrt_disc = np.sqrt(discriminant)
             t0 = (-b - sqrt_disc) / (2.0 * a)
             t1 = (-b + sqrt_disc) / (2.0 * a)
-            
+
             for t_cyl in [t0, t1]:
                 if t_cyl > 0:
                     z = orig[2] + t_cyl * dir[2]
-                    if -height/2 <= z <= height/2 and t_cyl < t_min:
+                    if -height / 2 <= z <= height / 2 and t_cyl < t_min:
                         t_min = t_cyl
                         hit = True
-                        n = np.array([orig[0]+t_min*dir[0], orig[1]+t_min*dir[1], 0.0])
+                        n = np.array(
+                            [orig[0] + t_min * dir[0], orig[1] + t_min * dir[1], 0.0]
+                        )
                         hit_normal = n / (np.linalg.norm(n) + 1e-8)
 
     if abs(dir[2]) > 1e-8:
-        for z_cap, nz in [(height/2, 1.0), (-height/2, -1.0)]:
+        for z_cap, nz in [(height / 2, 1.0), (-height / 2, -1.0)]:
             t_cap = (z_cap - orig[2]) / dir[2]
             if t_cap > 0 and t_cap < t_min:
                 x = orig[0] + t_cap * dir[0]
@@ -138,5 +158,5 @@ def ray_cylinder_intersect(orig, dir, radius, height):
                     t_min = t_cap
                     hit = True
                     hit_normal = np.array([0.0, 0.0, nz])
-                    
+
     return hit, t_min if hit else 0.0, hit_normal

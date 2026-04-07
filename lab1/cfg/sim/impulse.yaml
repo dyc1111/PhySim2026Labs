@@ -1,0 +1,8 @@
+type: impulse
+dt: 0.0041666667
+steps: -1
+substeps: 4
+collision:
+  restitution: 0.5
+  mu: 0.5
+  max_c: 5

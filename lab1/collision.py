@@ -35,7 +35,7 @@ class Collision:
         self.num_contacts[None] = 0
         self._resolve_contacts(0.016)
 
-    def _select_diverse_contacts(self, c_list, k):
+    def _select_contacts(self, c_list, k):
         if len(c_list) <= k:
             return c_list
         depths = np.array([float(c[4]) for c in c_list], dtype=np.float32)
@@ -55,20 +55,30 @@ class Collision:
             num_max_contacts=self.query_max_contact, enable_contact=True
         )
         result = fcl.CollisionResult()
-
         fcl.collide(obj_a, obj_b, request, result)
 
         contacts = []
         if result.is_collision:
             for c in result.contacts:
                 n = c.normal
-
-                # We need normal to point from B to A for consistency with our solver
                 if np.dot(n, pos[idx_a] - pos[idx_b]) < 0:
                     n = -n
-
-                # FCL already provides correct point and depth.
                 contacts.append((idx_a, idx_b, n, c.pos, c.penetration_depth))
+
+        return contacts
+
+    def detect_contacts(self, max_keep=None):
+        n_bodies = self.scene.num_bodies[None]
+        pos = self.scene.position.to_numpy()
+        rot = self.scene.rotation.to_numpy()
+
+        contacts = []
+        for i in range(n_bodies):
+            for j in range(i + 1, n_bodies):
+                c_list = self.get_contacts(i, j, pos, rot)
+                if not c_list:
+                    continue
+                contacts.extend(self._select_contacts(c_list, self.max_contact))
 
         return contacts
 
@@ -91,7 +101,7 @@ class Collision:
         total_contacts = len(contact_groups)
         reduced_groups = {}
         for key, c_list in contact_groups.items():
-            picked = self._select_diverse_contacts(c_list, self.max_contact)
+            picked = self._select_contacts(c_list, self.max_contact)
             reduced_groups[key] = picked
 
         if total_contacts == 0:
