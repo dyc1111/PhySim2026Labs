@@ -4,13 +4,6 @@ import numpy as np
 from rigidbody import create_rigid_body
 
 
-def _to_vec3(value, default):
-    v = np.array(default if value is None else value, dtype=np.float32)
-    if v.shape != (3,):
-        raise ValueError(f"Expected 3D vector, got shape {v.shape}")
-    return v
-
-
 @dataclass
 class Joint:
     joint_type: str
@@ -18,8 +11,8 @@ class Joint:
     child: int
     anchor_parent_local: np.ndarray
     anchor_child_local: np.ndarray
-    axis_parent_local: np.ndarray
-    axis_child_local: np.ndarray
+    axis_parent_local: np.ndarray | None
+    axis_child_local: np.ndarray | None
 
 
 class Chain:
@@ -71,71 +64,38 @@ class ArticulatedBody:
     def __init__(self, cfg):
         root_position = cfg["position"]
         self.root = np.array(root_position, dtype=np.float32)
+        self.links = []
+        self.link_name_to_local_id = {}
+        self.chain = None
 
         link_specs = self._build_link_specs(cfg)
         joint_specs = self._build_joint_specs(cfg)
-
-        self.links = []
-        self.link_name_to_local_id = {}
-        for local_idx, spec in enumerate(link_specs):
-            link_cfg = dict(spec)
-            link_name = link_cfg.pop("name")
-            local_offset = _to_vec3(link_cfg.pop("local_offset", None), [0.0, 0.0, 0.0])
-
-            link_cfg.setdefault("rotation_deg", [0.0, 0.0, 0.0])
-            link_cfg.setdefault("velocity", [0.0, 0.0, 0.0])
-            link_cfg.setdefault("angular_velocity", [0.0, 0.0, 0.0])
-            link_cfg.setdefault("dyn_type", "free")
-            link_cfg.setdefault("color", [0.65, 0.65, 0.85])
-            if link_cfg["dyn_type"] == "free":
-                link_cfg.setdefault("mass", 1.0)
-
-            link_cfg["position"] = (
-                (self.root + local_offset).astype(np.float32).tolist()
-            )
-            self.links.append(create_rigid_body(link_cfg))
-            self.link_name_to_local_id[link_name] = local_idx
-
-        joints = []
-        for spec in joint_specs:
-            parent_name = spec["parent"]
-            child_name = spec["child"]
-            if parent_name not in self.link_name_to_local_id:
-                raise ValueError(f"Unknown parent link name: {parent_name}")
-            if child_name not in self.link_name_to_local_id:
-                raise ValueError(f"Unknown child link name: {child_name}")
-
-            joint_type = spec["type"]
-            if joint_type not in ("revolute", "ball"):
-                raise NotImplementedError(f"Unsupported joint type: {joint_type}")
-
-            joints.append(
-                Joint(
-                    joint_type=joint_type,
-                    parent=self.link_name_to_local_id[parent_name],
-                    child=self.link_name_to_local_id[child_name],
-                    anchor_parent_local=_to_vec3(
-                        spec.get("anchor_parent_local"), [0.0, 0.0, 0.0]
-                    ),
-                    anchor_child_local=_to_vec3(
-                        spec.get("anchor_child_local"), [0.0, 0.0, 0.0]
-                    ),
-                    axis_parent_local=_to_vec3(
-                        spec.get("axis_parent_local"), [0.0, 0.0, 1.0]
-                    ),
-                    axis_child_local=_to_vec3(
-                        spec.get("axis_child_local"), [0.0, 0.0, 1.0]
-                    ),
-                )
-            )
-
-        self.chain = Chain(len(self.links), joints)
+        self._build_links(link_specs)
+        self._build_chain(joint_specs)
 
     def _build_link_specs(self, cfg):
         raise NotImplementedError
 
     def _build_joint_specs(self, cfg):
         raise NotImplementedError
+
+    def _build_links(self, link_specs):
+        for local_idx, spec in enumerate(link_specs):
+            link_cfg = dict(spec)
+            link_name = link_cfg.pop("name")
+            local_offset = np.array(link_cfg["local_offset"], dtype=np.float32)
+
+            link_cfg.setdefault("rotation_deg", [0.0, 0.0, 0.0])
+            link_cfg.setdefault("velocity", [0.0, 0.0, 0.0])
+            link_cfg.setdefault("angular_velocity", [0.0, 0.0, 0.0])
+            link_cfg.setdefault("dyn_type", "free")
+
+            link_cfg["position"] = (self.root + local_offset).tolist()
+            self.links.append(create_rigid_body(link_cfg))
+            self.link_name_to_local_id[link_name] = local_idx
+
+    def _build_chain(self, joint_specs):
+        return NotImplementedError
 
     def get_joint_constraints(self, link_ids: List[int]):
         constraints = []
@@ -145,18 +105,10 @@ class ArticulatedBody:
                     "joint_type": joint.joint_type,
                     "parent": int(link_ids[joint.parent]),
                     "child": int(link_ids[joint.child]),
-                    "anchor_parent_local": np.array(
-                        joint.anchor_parent_local, dtype=np.float32
-                    ),
-                    "anchor_child_local": np.array(
-                        joint.anchor_child_local, dtype=np.float32
-                    ),
-                    "axis_parent_local": np.array(
-                        joint.axis_parent_local, dtype=np.float32
-                    ),
-                    "axis_child_local": np.array(
-                        joint.axis_child_local, dtype=np.float32
-                    ),
+                    "anchor_parent_local": joint.anchor_parent_local,
+                    "anchor_child_local": joint.anchor_child_local,
+                    "axis_parent_local": joint.axis_parent_local,
+                    "axis_child_local": joint.axis_child_local,
                 }
             )
         return constraints
@@ -166,31 +118,32 @@ class ArticulatedRevoluteChain(ArticulatedBody):
     type_name = "articulated_revolute_chain"
 
     def _build_link_specs(self, cfg):
-        scale = float(cfg.get("scale", 1.0))
+        size = float(cfg["size"])
+        color = np.array(cfg["color"], dtype=np.float32)
         return [
             {
                 "name": "base",
                 "type": "cuboid",
-                "size": [0.24 * scale, 0.40 * scale, 0.24 * scale],
+                "size": [0.24 * size, 0.40 * size, 0.24 * size],
                 "mass": 2.0,
                 "local_offset": [0.0, 0.0, 0.0],
-                "color": cfg["color"],
+                "color": (color * 0.6).tolist(),
             },
             {
                 "name": "link1",
                 "type": "cuboid",
-                "size": [0.16 * scale, 0.50 * scale, 0.16 * scale],
+                "size": [0.16 * size, 0.50 * size, 0.16 * size],
                 "mass": 1.2,
-                "local_offset": [0.0, 0.45 * scale, 0.0],
-                "color": cfg["color"],
+                "local_offset": [0.0, 0.45 * size, 0.0],
+                "color": (color * 0.8).tolist(),
             },
             {
                 "name": "link2",
                 "type": "cuboid",
-                "size": [0.14 * scale, 0.44 * scale, 0.14 * scale],
+                "size": [0.14 * size, 0.44 * size, 0.14 * size],
                 "mass": 0.9,
-                "local_offset": [0.0, 0.92 * scale, 0.0],
-                "color": cfg["color"],
+                "local_offset": [0.0, 0.92 * size, 0.0],
+                "color": color.tolist(),
             },
         ]
 
@@ -217,12 +170,32 @@ class ArticulatedRevoluteChain(ArticulatedBody):
             },
         ]
 
+    def _build_chain(self, joint_spec):
+        joints = []
+        for spec in joint_spec:
+            parent_name = spec["parent"]
+            child_name = spec["child"]
+            joint_type = spec["type"]
+            joints.append(
+                Joint(
+                    joint_type,
+                    self.link_name_to_local_id[parent_name],
+                    self.link_name_to_local_id[child_name],
+                    np.array(spec["anchor_parent_local"], np.float32),
+                    np.array(spec["anchor_child_local"], np.float32),
+                    np.array(spec["axis_parent_local"], np.float32),
+                    np.array(spec["axis_parent_local"], np.float32),
+                )
+            )
+        self.chain = Chain(len(self.links), joints)
+
 
 class ArticulatedBallChain(ArticulatedBody):
     type_name = "articulated_ball_chain"
 
     def _build_link_specs(self, cfg):
         size = float(cfg["size"])
+        color = np.array(cfg["color"], dtype=np.float32)
         return [
             {
                 "name": "p0",
@@ -230,7 +203,7 @@ class ArticulatedBallChain(ArticulatedBody):
                 "size": 0.14 * size,
                 "mass": 1.4,
                 "local_offset": [0.0, 0.0, 0.0],
-                "color": cfg["color"],
+                "color": (color * 0.6).tolist(),
             },
             {
                 "name": "p1",
@@ -238,7 +211,7 @@ class ArticulatedBallChain(ArticulatedBody):
                 "size": 0.12 * size,
                 "mass": 1.1,
                 "local_offset": [0.0, -0.30 * size, 0.0],
-                "color": cfg["color"],
+                "color": (color * 0.8).tolist(),
             },
             {
                 "name": "p2",
@@ -246,7 +219,7 @@ class ArticulatedBallChain(ArticulatedBody):
                 "size": 0.10 * size,
                 "mass": 0.9,
                 "local_offset": [0.0, -0.56 * size, 0.0],
-                "color": cfg["color"],
+                "color": color.tolist(),
             },
         ]
 
@@ -268,6 +241,25 @@ class ArticulatedBallChain(ArticulatedBody):
                 "anchor_child_local": [0.0, 0.10 * scale, 0.0],
             },
         ]
+
+    def _build_chain(self, joint_spec):
+        joints = []
+        for spec in joint_spec:
+            parent_name = spec["parent"]
+            child_name = spec["child"]
+            joint_type = spec["type"]
+            joints.append(
+                Joint(
+                    joint_type,
+                    self.link_name_to_local_id[parent_name],
+                    self.link_name_to_local_id[child_name],
+                    np.array(spec["anchor_parent_local"], np.float32),
+                    np.array(spec["anchor_child_local"], np.float32),
+                    None,
+                    None,
+                )
+            )
+        self.chain = Chain(len(self.links), joints)
 
 
 ARTICULATED_TYPE_TO_CLASS = {
