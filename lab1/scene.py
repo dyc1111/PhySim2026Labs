@@ -41,6 +41,7 @@ class Scene:
                 raise NotImplementedError(f"Unsupported body type: {body_type}")
 
         self.body_to_articulation = np.array(body_to_articulation, dtype=np.int32)
+        self.limit_active_state = {}
 
         self.num_bodies = ti.field(dtype=ti.i32, shape=())
         n_bodies = len(self.bodies)
@@ -155,22 +156,76 @@ class Scene:
 
         return M_inv
 
-    def calc_joint_jacobian(self, dt, beta):
+    def _compute_revolute_angle_state(self, joint, rot, ang_vel):
+        n_bodies = self.num_bodies[None]
+        a = int(joint["parent"])
+        b = int(joint["child"])
+
+        axis_parent_local = np.array(joint["axis_parent_local"], dtype=np.float32)
+        axis_child_local = np.array(joint["axis_child_local"], dtype=np.float32)
+        h_parent = rot[a] @ axis_parent_local
+        h_child = rot[b] @ axis_child_local
+        h_parent = h_parent / (np.linalg.norm(h_parent) + 1e-8)
+        h_child = h_child / (np.linalg.norm(h_child) + 1e-8)
+        if float(np.dot(h_parent, h_child)) < 0.0:
+            h_child = -h_child
+        h = h_parent + h_child
+        if np.linalg.norm(h) < 1e-8:
+            h = h_parent
+        h = h / (np.linalg.norm(h) + 1e-8)
+
+        ref_parent_local = np.array(joint["angle_ref_parent_local"], dtype=np.float32)
+        ref_child_local = np.array(joint["angle_ref_child_local"], dtype=np.float32)
+        ref_parent = rot[a] @ ref_parent_local
+        ref_child = rot[b] @ ref_child_local
+
+        ref_parent = ref_parent - np.dot(ref_parent, h) * h
+        ref_child = ref_child - np.dot(ref_child, h) * h
+        ref_parent = ref_parent / (np.linalg.norm(ref_parent) + 1e-8)
+        ref_child = ref_child / (np.linalg.norm(ref_child) + 1e-8)
+
+        sin_theta = float(np.dot(np.cross(ref_parent, ref_child), h))
+        cos_theta = float(np.clip(np.dot(ref_parent, ref_child), -1.0, 1.0))
+        theta = float(np.arctan2(sin_theta, cos_theta))
+
+        omega_rel = ang_vel[b] - ang_vel[a]
+        theta_dot = float(np.dot(omega_rel, h))
+
+        row = np.zeros((6 * n_bodies,), dtype=np.float32)
+        row[6 * a + 3 : 6 * a + 6] = -h
+        row[6 * b + 3 : 6 * b + 6] = h
+        return row, theta, theta_dot
+
+    def calc_joint_jacobian(
+        self,
+        dt,
+        beta,
+        limit_beta=0.2,
+        limit_enter_margin=0.02,
+        limit_exit_margin=0.05,
+    ):
         n_bodies = self.num_bodies[None]
         n_joint_constraints = len(self.joint_constraints)
         if n_joint_constraints == 0:
             return (
                 np.zeros((0, 6 * n_bodies), dtype=np.float32),
                 np.zeros((0,), dtype=np.float32),
+                np.zeros((0, 6 * n_bodies), dtype=np.float32),
+                np.zeros((0,), dtype=np.float32),
             )
 
         pos = self.position.to_numpy()
         rot = self.rotation.to_numpy()
+        ang_vel = self.angular_velocity.to_numpy()
         axes = np.eye(3, dtype=np.float32)
-        stabilization = (float(beta) / float(dt)) if dt > 1e-8 else 0.0
+        dt_f = float(dt)
+        stabilization = (float(beta) / dt_f) if dt_f > 1e-8 else 0.0
+        limit_stabilization = (float(limit_beta) / dt_f) if dt_f > 1e-8 else 0.0
 
-        rows = []
-        rhs = []
+        joint_rows = []
+        joint_rhs = []
+        limit_rows = []
+        limit_rhs = []
 
         for joint in self.joint_constraints:
             a = int(joint["parent"])
@@ -195,8 +250,8 @@ class Scene:
                 row[6 * b : 6 * b + 6] = self.bodies[b].calc_jacobian(
                     r_b, direction, -1.0
                 )
-                rows.append(row)
-                rhs.append(-stabilization * float(np.dot(pos_error, direction)))
+                joint_rows.append(row)
+                joint_rhs.append(-stabilization * float(np.dot(pos_error, direction)))
 
             if joint["joint_type"] == "revolute":
                 axis_parent = rot[a] @ np.array(
@@ -215,12 +270,84 @@ class Scene:
                     row = np.zeros((6 * n_bodies,), dtype=np.float32)
                     row[6 * a + 3 : 6 * a + 6] = tangent
                     row[6 * b + 3 : 6 * b + 6] = -tangent
-                    rows.append(row)
-                    rhs.append(-stabilization * float(np.dot(axis_error, tangent)))
+                    joint_rows.append(row)
+                    joint_rhs.append(
+                        -stabilization * float(np.dot(axis_error, tangent))
+                    )
 
-        J_joint = np.stack(rows, axis=0).astype(np.float32)
-        rhs_joint = np.array(rhs, dtype=np.float32)
-        return J_joint, rhs_joint
+                angle_min = joint["angle_min"]
+                angle_max = joint["angle_max"]
+                if angle_min is not None or angle_max is not None:
+                    angle_row, theta, theta_dot = self._compute_revolute_angle_state(
+                        joint, rot, ang_vel
+                    )
+
+                    active_low = False
+                    active_up = False
+                    phi_low = 0.0
+                    phi_up = 0.0
+
+                    if angle_min is not None:
+                        phi_low = theta - angle_min
+                        key_low = (a, b, "low")
+                        prev_low = bool(self.limit_active_state.get(key_low, False))
+                        threshold_low = (
+                            float(limit_exit_margin)
+                            if prev_low
+                            else float(limit_enter_margin)
+                        )
+                        active_low = phi_low <= threshold_low
+                        active_low = active_low or (phi_low + dt_f * theta_dot <= 0.0)
+
+                    if angle_max is not None:
+                        phi_up = float(float(angle_max) - theta)
+                        key_up = (a, b, "up")
+                        prev_up = bool(self.limit_active_state.get(key_up, False))
+                        threshold_up = (
+                            float(limit_exit_margin)
+                            if prev_up
+                            else float(limit_enter_margin)
+                        )
+                        active_up = phi_up <= threshold_up
+                        active_up = active_up or (phi_up + dt_f * (-theta_dot) <= 0.0)
+
+                    if active_low and active_up:
+                        if phi_low <= phi_up:
+                            active_up = False
+                        else:
+                            active_low = False
+
+                    if angle_min is not None:
+                        self.limit_active_state[(a, b, "low")] = active_low
+                    if angle_max is not None:
+                        self.limit_active_state[(a, b, "up")] = active_up
+
+                    if active_low:
+                        rhs_low = -limit_stabilization * phi_low
+                        limit_rows.append(angle_row)
+                        limit_rhs.append(float(rhs_low))
+
+                    if active_up:
+                        upper_row = -angle_row
+                        rhs_up = -limit_stabilization * phi_up
+                        limit_rows.append(upper_row)
+                        limit_rhs.append(float(rhs_up))
+
+        if joint_rows:
+            J_joint = np.stack(joint_rows, axis=0).astype(np.float32)
+            rhs_joint = np.array(joint_rhs, dtype=np.float32)
+        else:
+            J_joint = np.zeros((0, 6 * n_bodies), dtype=np.float32)
+            rhs_joint = np.zeros((0,), dtype=np.float32)
+
+        if limit_rows:
+            J_limit = np.stack(limit_rows, axis=0).astype(np.float32)
+            rhs_limit = np.array(limit_rhs, dtype=np.float32)
+        else:
+            J_limit = np.zeros((0, 6 * n_bodies), dtype=np.float32)
+            rhs_limit = np.zeros((0,), dtype=np.float32)
+
+        return J_joint, rhs_joint, J_limit, rhs_limit
 
     def get_generalized_velocity(self):
         vel = self.velocity.to_numpy()

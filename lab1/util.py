@@ -38,6 +38,19 @@ def compute_tangent_basis(n):
     return t1.astype(np.float32), t2.astype(np.float32)
 
 
+def orthogonal_unit(axis):
+    a = axis / np.linalg.norm(axis)
+    ref = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    if abs(float(np.dot(a, ref))) > 0.9:
+        ref = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    t = np.cross(a, ref)
+    n = np.linalg.norm(t)
+    if n < 1e-8:
+        t = np.cross(a, np.array([0.0, 0.0, 1.0], dtype=np.float32))
+        n = np.linalg.norm(t)
+    return (t / (n + 1e-8)).astype(np.float32)
+
+
 def get_camera_ray_dir(u, v, cam_pos, cam_lookat, cam_up, fov_deg=45.0, aspect=1.0):
     F = np.array(cam_lookat, dtype=np.float32) - np.array(cam_pos, dtype=np.float32)
     F /= np.linalg.norm(F) + 1e-8

@@ -6,6 +6,7 @@ solver: CLARABEL  # SCS or CLARABEL
 R: 1e-6
 beta: 0.2
 joint_beta: 0.2
+limit_beta: 0.5
 slop: 0.005
 collision:
   restitution: 0.5

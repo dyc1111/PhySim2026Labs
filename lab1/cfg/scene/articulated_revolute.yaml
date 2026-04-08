@@ -3,7 +3,8 @@ objects:
   - type: articulated_revolute_chain
     dyn_type: free
     size: 1.0
-    position: [0.0, 1.4, 0.0]
+    position: [0.0, 1.16, 0.0]
+    rotation_deg: [0.0, 0.0, 180.0]
     color: [0.8, 0.2, 0.2]
   - type: cuboid
     dyn_type: freeze

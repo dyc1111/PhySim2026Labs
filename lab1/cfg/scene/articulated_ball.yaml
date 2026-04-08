@@ -4,6 +4,7 @@ objects:
     dyn_type: free
     size: 1.0
     position: [0.8, 1.6, 0.0]
+    rotation_deg: [0.0, 0.0, 0.0]
     color: [0.8, 0.2, 0.2]
   - type: cuboid
     dyn_type: freeze

@@ -107,8 +107,9 @@ class ConstraintSimulator(BaseSimulator):
         self.beta = sim_cfg["beta"]
         self.slop = sim_cfg["slop"]
         self.joint_beta = sim_cfg["joint_beta"]
+        self.limit_beta = sim_cfg["limit_beta"]
 
-    def _solve_ccp(self, G, g, n_contacts, equality_A=None, equality_b=None):
+    def _solve_ccp(self, G, g, n_contacts, joint_limit_ids, equality_A, equality_b):
         dim = g.shape[0]
 
         # Convert G to a psd matrix
@@ -126,8 +127,11 @@ class ConstraintSimulator(BaseSimulator):
             lam_t = lam[3 * i + 1 : 3 * i + 3]
             constraints.append(lam_n >= 0.0)
             constraints.append(cp.SOC(self.mu * lam_n, lam_t))
-        # joint equality constraints
-        if equality_A is not None and equality_b is not None:
+        # joint limit constraints
+        for idx in joint_limit_ids:
+            constraints.append(lam[int(idx)] >= 0.0)
+        # joint articulation constraints
+        if equality_A.shape[0] > 0:
             constraints.append(
                 equality_A.astype(np.float64) @ lam == equality_b.astype(np.float64)
             )
@@ -154,8 +158,12 @@ class ConstraintSimulator(BaseSimulator):
             # 2) Contact detection and CCP solve.
             contacts = self.collision.detect()
             J_contact = self.scene.calc_jacobian(contacts)
-            J_joint, rhs_joint = self.scene.calc_joint_jacobian(dt, self.joint_beta)
-            J = np.vstack([J_contact, J_joint])
+            J_joint, rhs_joint, J_limit, rhs_limit = self.scene.calc_joint_jacobian(
+                dt, self.joint_beta, self.limit_beta
+            )
+
+            J = np.vstack([J_contact, J_joint, J_limit])
+
             if J.shape[0] != 0:
                 M_inv = self.scene.calc_mass_inverse_matrix()
                 v_free = self.scene.get_generalized_velocity()
@@ -164,20 +172,33 @@ class ConstraintSimulator(BaseSimulator):
                 g = J @ v_free
 
                 for i, c in enumerate(contacts):
-                    depth = float(c[4])
+                    depth = c[4]
                     v_rel_n = g[3 * i]
                     v_target_n = v_rel_n + self.restitution * min(v_rel_n, 0.0)
                     bias = (self.beta / dt) * max(depth - self.slop, 0.0)
                     g[3 * i] = v_target_n - bias
 
-                equality_A = None
-                equality_b = None
                 contact_rows = J_contact.shape[0]
-                if J_joint.shape[0] > 0:
-                    equality_A = G[contact_rows:, :]
-                    equality_b = rhs_joint - g[contact_rows:]
+                joint_rows = J_joint.shape[0]
+                limit_rows = J_limit.shape[0]
 
-                lam = self._solve_ccp(G, g, len(contacts), equality_A, equality_b)
+                equality_start = contact_rows
+                equality_end = contact_rows + joint_rows
+                equality_A = G[equality_start:equality_end, :]
+                equality_b = rhs_joint - g[equality_start:equality_end]
+
+                limit_start = contact_rows + joint_rows
+                for i in range(limit_rows):
+                    row_idx = limit_start + i
+                    g[row_idx] -= rhs_limit[i]
+
+                joint_limit_ids = []
+                limit_start = contact_rows + joint_rows
+                joint_limit_ids.extend(range(limit_start, limit_start + limit_rows))
+
+                lam = self._solve_ccp(
+                    G, g, len(contacts), joint_limit_ids, equality_A, equality_b
+                )
                 self.scene.set_generalized_velocity(v_free + M_inv @ (J.T @ lam))
 
             # 3) Integrate positions and rotations from resolved velocities.

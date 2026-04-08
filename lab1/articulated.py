@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from typing import Dict, List
 import numpy as np
 from rigidbody import create_rigid_body
+from util import euler_angle_to_matrix, orthogonal_unit
 
 
 @dataclass
@@ -13,10 +13,14 @@ class Joint:
     anchor_child_local: np.ndarray
     axis_parent_local: np.ndarray | None
     axis_child_local: np.ndarray | None
+    angle_ref_parent_local: np.ndarray | None
+    angle_ref_child_local: np.ndarray | None
+    angle_min: float | None
+    angle_max: float | None
 
 
 class Chain:
-    def __init__(self, num_links: int, joints: List[Joint]):
+    def __init__(self, num_links, joints):
         self.num_links = num_links
         self.joints = joints
         self.parent = [-1] * num_links
@@ -62,15 +66,15 @@ class ArticulatedBody:
     type_name = "articulated_base"
 
     def __init__(self, cfg):
-        root_position = cfg["position"]
-        self.root = np.array(root_position, dtype=np.float32)
+        root_position = np.array(cfg["position"], dtype=np.float32)
+        root_rotation = np.array(cfg["rotation_deg"], dtype=np.float32)
         self.links = []
         self.link_name_to_local_id = {}
         self.chain = None
 
         link_specs = self._build_link_specs(cfg)
         joint_specs = self._build_joint_specs(cfg)
-        self._build_links(link_specs)
+        self._build_links(link_specs, root_position, root_rotation)
         self._build_chain(joint_specs)
 
     def _build_link_specs(self, cfg):
@@ -79,25 +83,26 @@ class ArticulatedBody:
     def _build_joint_specs(self, cfg):
         raise NotImplementedError
 
-    def _build_links(self, link_specs):
+    def _build_links(self, link_specs, root_pos, root_rot):
+        rot_mat = euler_angle_to_matrix(root_rot)
         for local_idx, spec in enumerate(link_specs):
             link_cfg = dict(spec)
             link_name = link_cfg.pop("name")
             local_offset = np.array(link_cfg["local_offset"], dtype=np.float32)
 
-            link_cfg.setdefault("rotation_deg", [0.0, 0.0, 0.0])
             link_cfg.setdefault("velocity", [0.0, 0.0, 0.0])
             link_cfg.setdefault("angular_velocity", [0.0, 0.0, 0.0])
             link_cfg.setdefault("dyn_type", "free")
+            link_cfg["position"] = (root_pos + rot_mat @ local_offset).tolist()
+            link_cfg["rotation_deg"] = root_rot.tolist()
 
-            link_cfg["position"] = (self.root + local_offset).tolist()
             self.links.append(create_rigid_body(link_cfg))
             self.link_name_to_local_id[link_name] = local_idx
 
     def _build_chain(self, joint_specs):
         return NotImplementedError
 
-    def get_joint_constraints(self, link_ids: List[int]):
+    def get_joint_constraints(self, link_ids):
         constraints = []
         for joint in self.chain.joints:
             constraints.append(
@@ -109,6 +114,10 @@ class ArticulatedBody:
                     "anchor_child_local": joint.anchor_child_local,
                     "axis_parent_local": joint.axis_parent_local,
                     "axis_child_local": joint.axis_child_local,
+                    "angle_ref_parent_local": joint.angle_ref_parent_local,
+                    "angle_ref_child_local": joint.angle_ref_child_local,
+                    "angle_min": joint.angle_min,
+                    "angle_max": joint.angle_max,
                 }
             )
         return constraints
@@ -124,8 +133,9 @@ class ArticulatedRevoluteChain(ArticulatedBody):
             {
                 "name": "base",
                 "type": "cuboid",
+                "dyn_type": "freeze",
                 "size": [0.24 * size, 0.40 * size, 0.24 * size],
-                "mass": 2.0,
+                # "mass": 2.0,
                 "local_offset": [0.0, 0.0, 0.0],
                 "color": (color * 0.6).tolist(),
             },
@@ -143,6 +153,7 @@ class ArticulatedRevoluteChain(ArticulatedBody):
                 "size": [0.14 * size, 0.44 * size, 0.14 * size],
                 "mass": 0.9,
                 "local_offset": [0.0, 0.92 * size, 0.0],
+                "velocity": [4.0, 0, 0],
                 "color": color.tolist(),
             },
         ]
@@ -158,6 +169,8 @@ class ArticulatedRevoluteChain(ArticulatedBody):
                 "anchor_child_local": [0.0, -0.25 * scale, 0.0],
                 "axis_parent_local": [0.0, 0.0, 1.0],
                 "axis_child_local": [0.0, 0.0, 1.0],
+                "angle_min": -1.2,
+                "angle_max": 1.2,
             },
             {
                 "type": "revolute",
@@ -167,6 +180,8 @@ class ArticulatedRevoluteChain(ArticulatedBody):
                 "anchor_child_local": [0.0, -0.22 * scale, 0.0],
                 "axis_parent_local": [0.0, 0.0, 1.0],
                 "axis_child_local": [0.0, 0.0, 1.0],
+                "angle_min": -1.0,
+                "angle_max": 1.0,
             },
         ]
 
@@ -176,6 +191,10 @@ class ArticulatedRevoluteChain(ArticulatedBody):
             parent_name = spec["parent"]
             child_name = spec["child"]
             joint_type = spec["type"]
+            axis_parent_local = spec["axis_parent_local"]
+            axis_child_local = spec["axis_child_local"]
+            angle_ref_parent_local = orthogonal_unit(axis_parent_local)
+            angle_ref_child_local = orthogonal_unit(axis_child_local)
             joints.append(
                 Joint(
                     joint_type,
@@ -183,8 +202,12 @@ class ArticulatedRevoluteChain(ArticulatedBody):
                     self.link_name_to_local_id[child_name],
                     np.array(spec["anchor_parent_local"], np.float32),
                     np.array(spec["anchor_child_local"], np.float32),
-                    np.array(spec["axis_parent_local"], np.float32),
-                    np.array(spec["axis_parent_local"], np.float32),
+                    axis_parent_local,
+                    axis_child_local,
+                    angle_ref_parent_local,
+                    angle_ref_child_local,
+                    float(spec.get("angle_min", -np.pi)),
+                    float(spec.get("angle_max", np.pi)),
                 )
             )
         self.chain = Chain(len(self.links), joints)
@@ -255,6 +278,8 @@ class ArticulatedBallChain(ArticulatedBody):
                     self.link_name_to_local_id[child_name],
                     np.array(spec["anchor_parent_local"], np.float32),
                     np.array(spec["anchor_child_local"], np.float32),
+                    None,
+                    None,
                     None,
                     None,
                 )
