@@ -8,7 +8,7 @@ from scene import Scene
 from simulator import ImpulseSimulator, ConstraintSimulator
 
 
-@hydra.main(config_path="cfg", config_name="base", version_base=None)
+@hydra.main(config_path="../cfg", config_name="base", version_base=None)
 def main(cfg):
     scene_cfg = OmegaConf.to_container(cfg.scene, resolve=True)
     sim_cfg = OmegaConf.to_container(cfg.sim, resolve=True)

@@ -339,7 +339,7 @@ class Custom(RigidBody):
 
     def __init__(self, cfg):
         super().__init__(cfg)
-        file_path = cfg["file_path"]
+        file_path = "../" + cfg["file_path"]
         scale = cfg["size"]
         convexify = cfg["convexify"]
 

@@ -5,23 +5,23 @@
 This project is organized into four layers:
 
 1. **Entry and configuration**
-	- `main.py`: Hydra entrypoint; selects scene and simulator (`impulse` / `constraint`).
+	- `src/main.py`: Hydra entrypoint; selects scene and simulator (`impulse` / `constraint`).
 	- `cfg/scene/*.yaml`: scene definitions (objects, gravity, initial states).
 	- `cfg/sim/*.yaml`: simulator parameters (time step, solver, restitution, friction, etc.).
 
 2. **Physics core**
-	- `scene.py`: global state arrays, kinematics integration, generalized mass inverse, Jacobian assembly.
-	- `collision.py`: FCL-based narrow-phase collision detection; contact aggregation and impulse resolution path.
-	- `simulator.py`: runtime loop, impulse-based simulator, constrained simulator (CCP/QP with SOC friction cones).
+	- `src/scene.py`: global state arrays, kinematics integration, generalized mass inverse, Jacobian assembly.
+	- `src/collision.py`: FCL-based narrow-phase collision detection; contact aggregation and impulse resolution path.
+	- `src/simulator.py`: runtime loop, impulse-based simulator, constrained simulator (CCP/QP with SOC friction cones).
 
 3. **Geometry and articulated modeling**
-	- `rigidbody.py`: primitive/custom rigid bodies (`cuboid`, `sphere`, `cylinder`, `custom`) and inertia/mesh/FCL conversion.
-	- `articulated.py`: articulated presets, chain topology, revolute/ball joints, joint limit metadata.
-	- `constants.py`: procedural mesh templates for cuboid/sphere/cylinder.
+	- `src/rigidbody.py`: primitive/custom rigid bodies (`cuboid`, `sphere`, `cylinder`, `custom`) and inertia/mesh/FCL conversion.
+	- `src/articulated.py`: articulated presets, chain topology, revolute/ball joints, joint limit metadata.
+	- `src/constants.py`: procedural mesh templates for cuboid/sphere/cylinder.
 
 4. **Interaction and utilities**
-	- `interaction.py`: mouse-based external force/torque injection.
-	- `util.py`: rotation utilities, tangent basis, camera rays, ray intersection helpers.
+	- `src/interaction.py`: mouse-based external force/torque injection.
+	- `src/util.py`: rotation utilities, tangent basis, camera rays, ray intersection helpers.
 
 The `assets/` directory provides rigid mesh models (`*.stl`) for custom-shape experiments.
 
@@ -51,7 +51,7 @@ This validates rigid-body translation and rotation updates under explicit Euler 
 
 ### Reproduce
 
-Run from `lab1/`:
+Run from `src/`:
 
 ```bash
 python main.py scene=single sim=impulse
