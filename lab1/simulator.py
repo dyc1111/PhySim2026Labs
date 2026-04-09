@@ -16,6 +16,11 @@ class BaseSimulator:
         self.steps = sim_cfg["steps"]
         self.substeps = sim_cfg["substeps"]
         self.collision = Collision(sim_cfg["collision"], self.scene)
+        self.video = sim_cfg["video"]
+        self.video_manager = ti.tools.VideoManager(
+            output_dir="./", framerate=30, automatic_build=False
+        )
+        self.video_manager.clean_frames()
 
     def _render(self, window, camera, canvas, scene_3d):
         scene_3d.set_camera(camera)
@@ -32,6 +37,9 @@ class BaseSimulator:
         canvas.scene(scene_3d)
         window.get_canvas().set_background_color((0.8, 0.8, 0.85))
         window.show()
+        if self.video:
+            pixels_img = window.get_image_buffer_as_numpy()
+            self.video_manager.write_frame(pixels_img)
 
     def _step(self, applied_forces=None, applied_torques=None):
         raise NotImplementedError
@@ -56,6 +64,8 @@ class BaseSimulator:
             self.steps if self.steps > 0 else float("inf")
         ):
             if window.is_pressed(ti.ui.ESCAPE):
+                if self.video:
+                    self.video_manager.make_video(gif=True, mp4=False)
                 break
             elif window.is_pressed(ti.ui.SPACE):
                 self._reset(camera)
@@ -72,6 +82,9 @@ class BaseSimulator:
             self._step(applied_forces, applied_torques)
             self._render(window, camera, canvas, scene_3d)
             frame += 1
+
+        if self.video:
+            self.video_manager.make_video(gif=True, mp4=False)
 
 
 class ImpulseSimulator(BaseSimulator):

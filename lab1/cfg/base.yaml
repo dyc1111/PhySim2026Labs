@@ -1,3 +1,5 @@
+video: False
+
 defaults:
   - _self_
   - scene: single

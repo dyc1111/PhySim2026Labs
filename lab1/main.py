@@ -15,6 +15,7 @@ def main(cfg):
     scene = Scene(scene_cfg)
 
     sim_type = sim_cfg["type"]
+    sim_cfg["video"] = cfg.video
     if sim_type == "constraint":
         simulator = ConstraintSimulator(sim_cfg, scene)
     elif sim_type == "impulse":

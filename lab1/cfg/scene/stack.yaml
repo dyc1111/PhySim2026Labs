@@ -54,6 +54,15 @@ objects:
     angular_velocity: [0.0, 0.0, 0.0]
     mass: 1.0
     color: [0.8, 0.8, 0.2]
+  - type: sphere
+    dyn_type: free
+    size: 0.1
+    rotation_deg: [0.0, 0.0, 0.0]
+    position: [-3.0, 0.1, 0.0]
+    velocity: [3.0, 3.0, 0.0]
+    angular_velocity: [0.0, 0.0, 0.0]
+    mass: 10.0
+    color: [0.6, 0.3, 0.3]
   - type: cuboid
     dyn_type: freeze
     size: [10.0, 0.01, 10.0]

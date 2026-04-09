@@ -238,7 +238,7 @@ class Sphere(RigidBody):
 
 @ti.data_oriented
 class Cylinder(RigidBody):
-    type_name = "cylindar"
+    type_name = "cylinder"
     _is_initialized = False
 
     @classmethod

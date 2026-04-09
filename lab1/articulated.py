@@ -282,6 +282,8 @@ class ArticulatedBallChain(ArticulatedBody):
                     None,
                     None,
                     None,
+                    None,
+                    None,
                 )
             )
         self.chain = Chain(len(self.links), joints)

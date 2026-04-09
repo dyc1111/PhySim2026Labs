@@ -4,3 +4,4 @@ vcx-sim-master/
 outputs
 __pycache__
 *.log
+*.txt
