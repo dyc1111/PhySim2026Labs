@@ -14,7 +14,6 @@ def main(cfg):
     sim_cfg = OmegaConf.to_container(cfg.sim, resolve=True)
 
     scene = Scene(scene_cfg)
-    exit()
     simulator = build_simulator(sim_cfg, scene)
     simulator.run()
 

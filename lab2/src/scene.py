@@ -1,9 +1,8 @@
-from typing import Any, Mapping
 import numpy as np
 import taichi as ti
 import math
-from constants import CellType, particle_offset
-from hashtable import HashTable
+from constants import CellType, particle_offset, bbox_verts, bbox_indices
+from util import HashTable
 
 
 @ti.data_oriented
@@ -17,6 +16,7 @@ class Scene:
         self._init_grid(grid_cfg)
         self._init_particle(particles_cfg)
         self._init_rigidbody(rigid_cfg)
+        self._init_renderer()
 
     def _init_grid(self, grid_cfg):
         self.grid_size = tuple(float(x) for x in grid_cfg["size"])
@@ -48,7 +48,11 @@ class Scene:
         self.grid_cell_type = ti.field(dtype=ti.i32, shape=(nx, ny, nz))
         self.grid_solid_velocity = ti.Vector.field(3, dtype=ti.f32, shape=(nx, ny, nz))
 
+        self.bbox_vertices = ti.Vector.field(3, dtype=ti.f32, shape=8)
+        self.bbox_indices = ti.field(dtype=ti.i32, shape=24)
+
         self._initialize_grid()
+        self._initialize_bbox()
 
     def _init_particle(self, particles_cfg):
         self.particle_radius = self.grid_dx * 0.25
@@ -69,7 +73,7 @@ class Scene:
         self._initialize_particles()
         self._update_cell_type()
 
-    def _init_rigidbody(self, rigid_cfg: list[Mapping[str, Any]]) -> None:
+    def _init_rigidbody(self, rigid_cfg):
         self.num_rigidbodies = len(rigid_cfg)
         self.rigidbody_capacity = max(1, self.num_rigidbodies)
 
@@ -120,6 +124,27 @@ class Scene:
             else:
                 self.grid_cell_type[I] = CellType.CELL_AIR.value
             self.grid_solid_velocity[I] = ti.Vector([0.0, 0.0, 0.0])
+
+    def _init_renderer(self):
+        self.window = ti.ui.Window("Fluid Simulation", (1280, 720), vsync=True)
+        self.canvas = self.window.get_canvas()
+        self.scene_3d = self.window.get_scene()
+        self.camera = ti.ui.Camera()
+        self._init_camera()
+
+    def _init_camera(self):
+        sx, sy, sz = self.grid_size
+        center = (0.5 * sx, 0.5 * sy, 0.5 * sz)
+        span = max(sx, sy, sz)
+        self.camera.position(-0.9 * span, 0.9 * span, -0.9 * span)
+        self.camera.lookat(center[0], center[1], center[2])
+        self.camera.up(0.0, 1.0, 0.0)
+
+    def _initialize_bbox(self):
+        sx, sy, sz = self.grid_size
+        verts = bbox_verts * np.array([sx, sy, sz], dtype=np.float32).reshape(1, -1)
+        self.bbox_vertices.from_numpy(verts)
+        self.bbox_indices.from_numpy(bbox_indices)
 
     def _build_initial_particle_positions(self, particles_cfg):
         range_low = np.array(particles_cfg["low"], dtype=np.float32)
@@ -184,8 +209,41 @@ class Scene:
             self.rigid_radius[i] = 0.0
             self.rigid_half_extent[i] = ti.Vector([0.0, 0.0, 0.0])
 
-    def reset(self) -> None:
+    def _reset(self):
         self._initialize_grid()
         self._initialize_particles()
         self._update_cell_type()
         self._initialize_rigidbodies()
+        self._init_camera()
+
+    def render(self):
+        if not self.window.running or self.window.is_pressed(ti.ui.ESCAPE):
+            return False
+        elif self.window.is_pressed(ti.ui.SPACE):
+            self._reset()
+
+        if not self.window.is_pressed(ti.ui.CTRL):
+            self.camera.track_user_inputs(
+                self.window, movement_speed=0.03, hold_key=ti.ui.LMB
+            )
+
+        self.scene_3d.set_camera(self.camera)
+        self.scene_3d.ambient_light((0.6, 0.6, 0.6))
+        self.scene_3d.point_light((5, 5, 5), (1.2, 1.2, 1.2))
+
+        self.scene_3d.particles(
+            self.particle_pos,
+            radius=self.particle_radius,
+            color=(0.1, 0.35, 0.95),
+        )
+        self.scene_3d.lines(
+            self.bbox_vertices,
+            width=2.0,
+            indices=self.bbox_indices,
+            color=(0.05, 0.05, 0.05),
+        )
+
+        self.canvas.scene(self.scene_3d)
+        self.canvas.set_background_color((0.8, 0.8, 0.85))
+        self.window.show()
+        return True

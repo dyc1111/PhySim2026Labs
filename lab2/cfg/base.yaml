@@ -6,8 +6,8 @@ defaults:
 scene:
   gravity: [0.0, -9.8, 0.0]
   particles:
-    low: [0.0, 0.0, 0.0]
-    high: [2.0, 5.0, 5.0]
+    low: [3.0, 0.0, 0.0]
+    high: [5.0, 5.0, 5.0]
   grid:
     size: [5.0, 5.0, 5.0]
     resolution: [32, 32, 32]
@@ -17,7 +17,7 @@ sim:
   type: flip_pic
   dt: 0.0166666667
   substeps: 2
-  steps: 1
+  steps: -1
 
   # FLIP/PIC controls
   flip_ratio: 0.95
