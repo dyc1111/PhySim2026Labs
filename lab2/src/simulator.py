@@ -71,6 +71,7 @@ class Simulator(ABC):
 class FlipPicSimulator(Simulator):
     def __init__(self, sim_cfg, scene: Scene):
         self.flip_ratio = float(sim_cfg["flip_ratio"])
+        self.collision_damping = float(sim_cfg["collision_damping"])
         self.separate_particles = bool(sim_cfg["separate_particles"])
         self.num_particle_iters = int(sim_cfg["num_particle_iters"])
         self.num_pressure_iters = int(sim_cfg["num_pressure_iters"])
@@ -81,7 +82,7 @@ class FlipPicSimulator(Simulator):
     def _build_strategies(self) -> FluidStrategies:
         return FluidStrategies(
             advection=EulerIntegration(self.scene),
-            collision=CollisionStrategy(self.scene),
+            collision=CollisionStrategy(self.scene, self.collision_damping),
             separation=SeparationStrategy(self.scene, self.num_particle_iters),
             transfer=FlipTransferStrategy(self.scene, self.flip_ratio),
             density=DensityStrategy(self.scene),

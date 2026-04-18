@@ -26,6 +26,7 @@ sim:
   num_pressure_iters: 40
   over_relaxation: 1.9
   compensate_drift: false
+  collision_damping: 0.0
 
   # Strategy selections reserved for future factory wiring.
   strategies:

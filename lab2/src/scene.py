@@ -8,7 +8,8 @@ from util import HashTable
 @ti.data_oriented
 class Scene:
     def __init__(self, scene_cfg):
-        self.gravity = np.array(scene_cfg["gravity"], dtype=np.float32)
+        gravity = np.array(scene_cfg["gravity"], dtype=np.float32)
+        self.gravity = ti.Vector([gravity[0], gravity[1], gravity[2]])
         particles_cfg = scene_cfg["particles"]
         grid_cfg = scene_cfg["grid"]
         rigid_cfg = scene_cfg["rigidbodies"]
@@ -52,7 +53,7 @@ class Scene:
         self.bbox_indices = ti.field(dtype=ti.i32, shape=24)
 
         self._initialize_grid()
-        self._initialize_bbox()
+        self._init_bbox()
 
     def _init_particle(self, particles_cfg):
         self.particle_radius = self.grid_dx * 0.25
@@ -69,6 +70,7 @@ class Scene:
         self.hashtable = HashTable(
             self.grid_size, self.particle_radius, self.num_particles
         )
+        self.num_water_grid = ti.field(dtype=ti.i32, shape=())
 
         self._initialize_particles()
         self._update_cell_type()
@@ -140,7 +142,7 @@ class Scene:
         self.camera.lookat(center[0], center[1], center[2])
         self.camera.up(0.0, 1.0, 0.0)
 
-    def _initialize_bbox(self):
+    def _init_bbox(self):
         sx, sy, sz = self.grid_size
         verts = bbox_verts * np.array([sx, sy, sz], dtype=np.float32).reshape(1, -1)
         self.bbox_vertices.from_numpy(verts)
@@ -187,6 +189,7 @@ class Scene:
 
     @ti.kernel
     def _update_cell_type(self):
+        self.num_water_grid[None] = 0
         for I in ti.grouped(self.grid_cell_type):
             if self.grid_cell_type[I] != CellType.CELL_SOLID.value:
                 self.grid_cell_type[I] = CellType.CELL_AIR.value
@@ -196,6 +199,7 @@ class Scene:
             z = ti.cast(ti.floor(self.particle_pos[p][2] / self.grid_dz), ti.i32)
             if self.grid_cell_type[x, y, z] != CellType.CELL_SOLID.value:
                 self.grid_cell_type[x, y, z] = CellType.CELL_WATER.value
+                ti.atomic_add(self.num_water_grid[None], 1)
 
     @ti.kernel
     def _initialize_rigidbodies(self):
