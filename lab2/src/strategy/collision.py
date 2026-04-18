@@ -42,14 +42,32 @@ class CollisionStrategy(CollisionStrategyBase):
         dx = self.scene.grid_dx
         dy = self.scene.grid_dy
         dz = self.scene.grid_dz
-        size = self.scene.grid_size
-        sizex, sizey, sizez = size[0], size[1], size[2]
+        x, y, z = self.scene.grid_size
         eps = 1e-8
 
         for p in range(self.scene.num_particles):
             pos = self.scene.particle_pos[p]
             vel = self.scene.particle_vel[p]
             radius = self.scene.particle_radius
+
+            if pos[0] < radius:
+                pos[0] = radius
+                vel[0] = 0
+            if pos[0] > x - radius:
+                pos[0] = x - radius
+                vel[0] = 0
+            if pos[1] < radius:
+                pos[1] = radius
+                vel[1] = 0
+            if pos[1] > y - radius:
+                pos[1] = y - radius
+                vel[1] = 0
+            if pos[2] < radius:
+                pos[2] = radius
+                vel[2] = 0
+            if pos[2] > z - radius:
+                pos[2] = z - radius
+                vel[2] = 0
 
             cx = ti.cast(ti.floor(pos[0] / dx), ti.i32)
             cy = ti.cast(ti.floor(pos[1] / dy), ti.i32)
@@ -68,6 +86,12 @@ class CollisionStrategy(CollisionStrategyBase):
                             self.scene.grid_cell_type[i, j, k]
                             != CellType.CELL_SOLID.value
                         ):
+                            continue
+                        if i == 0 or i == nx - 1:
+                            continue
+                        if j == 0 or j == ny - 1:
+                            continue
+                        if k == 0 or k == nz - 1:
                             continue
 
                         bmin = ti.Vector([i * dx, j * dy, k * dz])

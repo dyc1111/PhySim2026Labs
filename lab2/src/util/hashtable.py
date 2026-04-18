@@ -13,13 +13,13 @@ class HashTable:
         self.cell_size = float(particle_radius) * 2.2
         sx, sy, sz = (float(v) for v in domain_size)
         self.resolution = (
-            max(1, int(math.ceil(sx / self.cell_size))),
-            max(1, int(math.ceil(sy / self.cell_size))),
-            max(1, int(math.ceil(sz / self.cell_size))),
+            int(math.ceil(sx / self.cell_size)),
+            int(math.ceil(sy / self.cell_size)),
+            int(math.ceil(sz / self.cell_size)),
         )
         hx, hy, hz = self.resolution
 
-        self.max_particles = int(max_particles)
+        self.max_particles = max_particles
         self.num_cells = hx * hy * hz
 
         self.particle_cell_id = ti.field(dtype=ti.i32, shape=self.max_particles)
@@ -40,22 +40,44 @@ class HashTable:
         return x, y, z
 
     @ti.func
-    def _flatten(self, x: ti.i32, y: ti.i32, z: ti.i32) -> ti.i32:  # type: ignore
-        hx, hy, hz = self.resolution
+    def flatten(self, x: ti.i32, y: ti.i32, z: ti.i32) -> ti.i32:  # type: ignore
+        _, hy, hz = self.resolution
         return (x * hy + y) * hz + z
 
+    @ti.func
+    def neighbouring_cell_bounds(self, pos: ti.types.vector(3, ti.f32)):  # type: ignore
+        x, y, z = self._coord_from_pos(pos)
+        hx, hy, hz = self.resolution
+        i0 = ti.max(0, x - 1)
+        i1 = ti.min(hx - 1, x + 1)
+        j0 = ti.max(0, y - 1)
+        j1 = ti.min(hy - 1, y + 1)
+        k0 = ti.max(0, z - 1)
+        k1 = ti.min(hz - 1, z + 1)
+        return i0, i1, j0, j1, k0, k1
+
+    @ti.func
+    def cell_begin(self, h: ti.i32) -> ti.i32:  # type: ignore
+        return self.cell_offset[h]
+
+    @ti.func
+    def cell_end(self, h: ti.i32) -> ti.i32:  # type: ignore
+        return self.cell_offset[h + 1]
+
     @ti.kernel
-    def _count_particles(
-        self, particle_pos: ti.template(), num_particles: ti.i32  # type: ignore
-    ):
+    def _clear(self):
         for h in range(self.num_cells):
             self.cell_count[h] = 0
             self.cell_offset[h] = 0
             self.cell_cursor[h] = 0
 
+    @ti.kernel
+    def _count_particles(
+        self, particle_pos: ti.template(), num_particles: ti.i32  # type: ignore
+    ):
         for p in range(num_particles):
             x, y, z = self._coord_from_pos(particle_pos[p])
-            h = self._flatten(x, y, z)
+            h = self.flatten(x, y, z)
             self.particle_cell_id[p] = h
             ti.atomic_add(self.cell_count[h], 1)
 
@@ -76,7 +98,8 @@ class HashTable:
             idx = ti.atomic_add(self.cell_cursor[h], 1)
             self.particle_id[idx] = p
 
-    def rebuild(self, particle_pos, num_particles: int) -> None:
-        self._count_particles(particle_pos, int(num_particles))
+    def rebuild(self, particle_pos, num_particles):
+        self._clear()
+        self._count_particles(particle_pos, num_particles)
         self._build_offsets()
-        self._scatter_particles(int(num_particles))
+        self._scatter_particles(num_particles)

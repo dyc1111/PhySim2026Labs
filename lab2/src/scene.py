@@ -73,7 +73,7 @@ class Scene:
         self.num_water_grid = ti.field(dtype=ti.i32, shape=())
 
         self._initialize_particles()
-        self._update_cell_type()
+        self.update_cell_type()
 
     def _init_rigidbody(self, rigid_cfg):
         self.num_rigidbodies = len(rigid_cfg)
@@ -188,7 +188,7 @@ class Scene:
             self.particle_vel[p] = ti.Vector([0.0, 0.0, 0.0])
 
     @ti.kernel
-    def _update_cell_type(self):
+    def update_cell_type(self):
         self.num_water_grid[None] = 0
         for I in ti.grouped(self.grid_cell_type):
             if self.grid_cell_type[I] != CellType.CELL_SOLID.value:
@@ -216,7 +216,7 @@ class Scene:
     def _reset(self):
         self._initialize_grid()
         self._initialize_particles()
-        self._update_cell_type()
+        self.update_cell_type()
         self._initialize_rigidbodies()
         self._init_camera()
 

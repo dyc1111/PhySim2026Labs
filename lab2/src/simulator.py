@@ -80,10 +80,14 @@ class FlipPicSimulator(Simulator):
         super().__init__(sim_cfg, scene)
 
     def _build_strategies(self) -> FluidStrategies:
+        if self.separate_particles:
+            separate = SeparationStrategy(self.scene, self.num_particle_iters)
+        else:
+            separate = NoOpSeparationStrategy()
         return FluidStrategies(
             advection=EulerIntegration(self.scene),
             collision=CollisionStrategy(self.scene, self.collision_damping),
-            separation=SeparationStrategy(self.scene, self.num_particle_iters),
+            separation=separate,
             transfer=FlipTransferStrategy(self.scene, self.flip_ratio),
             density=DensityStrategy(self.scene),
             divergence=GaussSeidel(
