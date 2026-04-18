@@ -39,9 +39,13 @@ class Scene:
         self.grid_v_prev = ti.field(dtype=ti.f32, shape=(nx, ny + 1, nz))
         self.grid_w_prev = ti.field(dtype=ti.f32, shape=(nx, ny, nz + 1))
 
-        self.grid_u_weight = ti.field(dtype=ti.f32, shape=(nx + 1, ny, nz))
-        self.grid_v_weight = ti.field(dtype=ti.f32, shape=(nx, ny + 1, nz))
-        self.grid_w_weight = ti.field(dtype=ti.f32, shape=(nx, ny, nz + 1))
+        self.grid_u_num = ti.field(dtype=ti.f32, shape=(nx + 1, ny, nz))
+        self.grid_v_num = ti.field(dtype=ti.f32, shape=(nx, ny + 1, nz))
+        self.grid_w_num = ti.field(dtype=ti.f32, shape=(nx, ny, nz + 1))
+
+        self.grid_u_denom = ti.field(dtype=ti.f32, shape=(nx + 1, ny, nz))
+        self.grid_v_denom = ti.field(dtype=ti.f32, shape=(nx, ny + 1, nz))
+        self.grid_w_denom = ti.field(dtype=ti.f32, shape=(nx, ny, nz + 1))
 
         self.grid_pressure = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
         self.grid_divergence = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
@@ -107,15 +111,18 @@ class Scene:
         for I in ti.grouped(self.grid_u):
             self.grid_u[I] = 0.0
             self.grid_u_prev[I] = 0.0
-            self.grid_u_weight[I] = 0.0
+            self.grid_u_num[I] = 0.0
+            self.grid_u_denom[I] = 0.0
         for I in ti.grouped(self.grid_v):
             self.grid_v[I] = 0.0
             self.grid_v_prev[I] = 0.0
-            self.grid_v_weight[I] = 0.0
+            self.grid_v_num[I] = 0.0
+            self.grid_v_denom[I] = 0.0
         for I in ti.grouped(self.grid_w):
             self.grid_w[I] = 0.0
             self.grid_w_prev[I] = 0.0
-            self.grid_w_weight[I] = 0.0
+            self.grid_w_num[I] = 0.0
+            self.grid_w_denom[I] = 0.0
         for I in ti.grouped(self.grid_pressure):
             self.grid_pressure[I] = 0.0
             self.grid_divergence[I] = 0.0

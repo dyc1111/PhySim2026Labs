@@ -10,7 +10,7 @@ scene:
     high: [5.0, 5.0, 5.0]
   grid:
     size: [5.0, 5.0, 5.0]
-    resolution: [32, 32, 32]
+    resolution: [24, 24, 24]
   rigidbodies: []
 
 sim:
