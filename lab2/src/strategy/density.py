@@ -18,6 +18,7 @@ class DensityStrategy(DensityStrategyBase):
         self.scene.avg_density[None] = float(self.scene.num_particles) / float(
             self.scene.num_water_grid[None]
         )
+        print(f"density: {self.scene.avg_density[None]}")
 
 
 class NoOpDensityStrategy(DensityStrategyBase):

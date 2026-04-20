@@ -10,7 +10,7 @@ scene:
     high: [5.0, 5.0, 5.0]
   grid:
     size: [5.0, 5.0, 5.0]
-    resolution: [24, 24, 24]
+    resolution: [32, 32, 32]
   rigidbodies: []
 
 sim:
@@ -23,9 +23,9 @@ sim:
   flip_ratio: 0.95
   separate_particles: true
   num_particle_iters: 2
-  num_pressure_iters: 40
+  num_pressure_iters: 50
   over_relaxation: 1.9
-  compensate_drift: false
+  compensate_drift: true
   collision_damping: 0.0
 
   # Strategy selections reserved for future factory wiring.

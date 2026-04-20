@@ -49,6 +49,7 @@ class Scene:
 
         self.grid_pressure = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
         self.grid_divergence = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
+        self.grid_particle_num = ti.field(dtype=ti.i32, shape=(nx, ny, nz))
         self.grid_particle_density = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
         self.grid_cell_type = ti.field(dtype=ti.i32, shape=(nx, ny, nz))
         self.grid_solid_velocity = ti.Vector.field(3, dtype=ti.f32, shape=(nx, ny, nz))
@@ -63,6 +64,7 @@ class Scene:
         self.particle_radius = self.grid_dx * 0.25
         positions = self._build_initial_particle_positions(particles_cfg)
         self.num_particles = int(positions.shape[0])
+        print(f"num_particles: {self.num_particles}")
 
         self.particle_init_pos = ti.Vector.field(
             3, dtype=ti.f32, shape=self.num_particles
@@ -199,15 +201,20 @@ class Scene:
     def update_cell_type(self):
         self.num_water_grid[None] = 0
         for I in ti.grouped(self.grid_cell_type):
-            if self.grid_cell_type[I] != CellType.CELL_SOLID.value:
+            self.grid_particle_num[I] = 0
+            if self.grid_cell_type[I] == CellType.CELL_WATER.value:
                 self.grid_cell_type[I] = CellType.CELL_AIR.value
         for p in range(self.num_particles):
             x = ti.cast(ti.floor(self.particle_pos[p][0] / self.grid_dx), ti.i32)
             y = ti.cast(ti.floor(self.particle_pos[p][1] / self.grid_dy), ti.i32)
             z = ti.cast(ti.floor(self.particle_pos[p][2] / self.grid_dz), ti.i32)
-            if self.grid_cell_type[x, y, z] != CellType.CELL_SOLID.value:
+            ti.atomic_add(self.grid_particle_num[x, y, z], 1)
+            if self.grid_cell_type[x, y, z] == CellType.CELL_AIR.value:
                 self.grid_cell_type[x, y, z] = CellType.CELL_WATER.value
+        for I in ti.grouped(self.grid_cell_type):
+            if self.grid_cell_type[I] == CellType.CELL_WATER.value:
                 ti.atomic_add(self.num_water_grid[None], 1)
+        print(f"water_grids: {self.num_water_grid[None]}")
 
     @ti.kernel
     def _initialize_rigidbodies(self):

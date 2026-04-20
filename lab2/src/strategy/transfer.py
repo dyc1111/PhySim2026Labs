@@ -112,8 +112,6 @@ class FlipTransferStrategy(TransferStrategyBase):
         for I in ti.grouped(self.scene.grid_w_num):
             self.scene.grid_w[I] = self.scene.grid_w_num[I] / self.scene.grid_w_denom[I]
 
-        # FLIP uses the grid change within the current substep, so snapshot
-        # the just-transferred (pre-projection) grid as the reference state.
         for I in ti.grouped(self.scene.grid_u):
             self.scene.grid_u_prev[I] = self.scene.grid_u[I]
         for I in ti.grouped(self.scene.grid_v):
