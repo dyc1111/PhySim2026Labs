@@ -17,6 +17,7 @@ class EulerIntegration(AdvectionStrategyBase):
 
     @ti.kernel
     def handle_advection(self, dt: float):
+        print(self.scene.particle_vel[self.scene.num_particles - 1])
         for p in range(self.scene.num_particles):
-            self.scene.particle_pos[p] += self.scene.particle_vel[p] * dt
             self.scene.particle_vel[p] += self.scene.gravity * dt
+            self.scene.particle_pos[p] += self.scene.particle_vel[p] * dt

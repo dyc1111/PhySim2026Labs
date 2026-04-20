@@ -14,4 +14,12 @@ class DensityStrategy(DensityStrategyBase):
         self.scene = scene
 
     def handle_density(self):
-        pass
+        self.scene.update_cell_type()
+        self.scene.avg_density[None] = float(self.scene.num_particles) / float(
+            self.scene.num_water_grid[None]
+        )
+
+
+class NoOpDensityStrategy(DensityStrategyBase):
+    def handle_density(self):
+        return

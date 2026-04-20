@@ -21,12 +21,15 @@ class HashTable:
 
         self.max_particles = max_particles
         self.num_cells = hx * hy * hz
+        self.scan_size = 1 << (self.num_cells - 1).bit_length()
 
         self.particle_cell_id = ti.field(dtype=ti.i32, shape=self.max_particles)
         self.cell_count = ti.field(dtype=ti.i32, shape=self.num_cells)
         self.cell_offset = ti.field(dtype=ti.i32, shape=self.num_cells + 1)
         self.cell_cursor = ti.field(dtype=ti.i32, shape=self.num_cells)
         self.particle_id = ti.field(dtype=ti.i32, shape=self.max_particles)
+        self.scan_buffer = ti.field(dtype=ti.i32, shape=self.scan_size)
+        self.scan_total = ti.field(dtype=ti.i32, shape=())
 
     @ti.func
     def _coord_from_pos(self, pos: ti.types.vector(3, ti.f32)):  # type: ignore
@@ -70,6 +73,7 @@ class HashTable:
             self.cell_count[h] = 0
             self.cell_offset[h] = 0
             self.cell_cursor[h] = 0
+        self.cell_offset[self.num_cells] = 0
 
     @ti.kernel
     def _count_particles(
@@ -82,14 +86,64 @@ class HashTable:
             ti.atomic_add(self.cell_count[h], 1)
 
     @ti.kernel
-    def _build_offsets(self):
-        ti.loop_config(serialize=True)
-        running = 0
+    def _prepare_scan_buffer(self):
+        for h in range(self.scan_size):
+            if h < self.num_cells:
+                self.scan_buffer[h] = self.cell_count[h]
+            else:
+                self.scan_buffer[h] = 0
+
+    @ti.kernel
+    def _scan_upsweep(self, stride: ti.i32):  # type: ignore
+        step = stride * 2
+        for i in range(self.scan_size // step):
+            right = (i + 1) * step - 1
+            left = right - stride
+            self.scan_buffer[right] += self.scan_buffer[left]
+
+    @ti.kernel
+    def _scan_save_total(self):
+        self.scan_total[None] = self.scan_buffer[self.scan_size - 1]
+
+    @ti.kernel
+    def _scan_set_last_zero(self):
+        self.scan_buffer[self.scan_size - 1] = 0
+
+    @ti.kernel
+    def _scan_downsweep(self, stride: ti.i32):  # type: ignore
+        step = stride * 2
+        for i in range(self.scan_size // step):
+            right = (i + 1) * step - 1
+            left = right - stride
+            tmp = self.scan_buffer[left]
+            self.scan_buffer[left] = self.scan_buffer[right]
+            self.scan_buffer[right] += tmp
+
+    @ti.kernel
+    def _write_offsets_from_scan(self):
         for h in range(self.num_cells):
-            self.cell_offset[h] = running
-            self.cell_cursor[h] = running
-            running += self.cell_count[h]
-        self.cell_offset[self.num_cells] = running
+            offset = self.scan_buffer[h]
+            self.cell_offset[h] = offset
+            self.cell_cursor[h] = offset
+        self.cell_offset[self.num_cells] = self.scan_total[None]
+
+    def _build_offsets(self):
+        self._prepare_scan_buffer()
+
+        stride = 1
+        while stride < self.scan_size:
+            self._scan_upsweep(stride)
+            stride <<= 1
+
+        self._scan_save_total()
+        self._scan_set_last_zero()
+
+        stride = self.scan_size >> 1
+        while stride > 0:
+            self._scan_downsweep(stride)
+            stride >>= 1
+
+        self._write_offsets_from_scan()
 
     @ti.kernel
     def _scatter_particles(self, num_particles: ti.i32):  # type: ignore

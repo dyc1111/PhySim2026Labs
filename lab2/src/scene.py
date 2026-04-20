@@ -75,6 +75,7 @@ class Scene:
             self.grid_size, self.particle_radius, self.num_particles
         )
         self.num_water_grid = ti.field(dtype=ti.i32, shape=())
+        self.avg_density = ti.field(dtype=ti.f32, shape=())
 
         self._initialize_particles()
         self.update_cell_type()

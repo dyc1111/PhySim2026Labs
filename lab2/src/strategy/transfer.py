@@ -15,16 +15,13 @@ class FlipTransferStrategy(TransferStrategyBase):
     def __init__(self, scene: Scene, flip_ratio):
         self.scene = scene
         self.flip_ratio = flip_ratio
+        self.pic_vel = ti.Vector.field(3, dtype=ti.f32, shape=self.scene.num_particles)
+        self.flip_delta_vel = ti.Vector.field(
+            3, dtype=ti.f32, shape=self.scene.num_particles
+        )
 
     @ti.kernel
     def _p2g_transfer(self):
-        for I in ti.grouped(self.scene.grid_u):
-            self.scene.grid_u_prev[I] = self.scene.grid_u[I]
-        for I in ti.grouped(self.scene.grid_v):
-            self.scene.grid_v_prev[I] = self.scene.grid_v[I]
-        for I in ti.grouped(self.scene.grid_w):
-            self.scene.grid_w_prev[I] = self.scene.grid_w[I]
-
         eps = 1e-8
         for I in ti.grouped(self.scene.grid_u_num):
             self.scene.grid_u_num[I] = 0.0
@@ -114,6 +111,15 @@ class FlipTransferStrategy(TransferStrategyBase):
             self.scene.grid_v[I] = self.scene.grid_v_num[I] / self.scene.grid_v_denom[I]
         for I in ti.grouped(self.scene.grid_w_num):
             self.scene.grid_w[I] = self.scene.grid_w_num[I] / self.scene.grid_w_denom[I]
+
+        # FLIP uses the grid change within the current substep, so snapshot
+        # the just-transferred (pre-projection) grid as the reference state.
+        for I in ti.grouped(self.scene.grid_u):
+            self.scene.grid_u_prev[I] = self.scene.grid_u[I]
+        for I in ti.grouped(self.scene.grid_v):
+            self.scene.grid_v_prev[I] = self.scene.grid_v[I]
+        for I in ti.grouped(self.scene.grid_w):
+            self.scene.grid_w_prev[I] = self.scene.grid_w[I]
 
     @ti.kernel
     def _g2p_transfer(
@@ -222,8 +228,4 @@ class FlipTransferStrategy(TransferStrategyBase):
         if is_p2g:
             self._p2g_transfer()
         else:
-            pic_vel = ti.Vector.field(3, dtype=ti.f32, shape=self.scene.num_particles)
-            flip_delta_vel = ti.Vector.field(
-                3, dtype=ti.f32, shape=self.scene.num_particles
-            )
-            self._g2p_transfer(pic_vel, flip_delta_vel)
+            self._g2p_transfer(self.pic_vel, self.flip_delta_vel)
