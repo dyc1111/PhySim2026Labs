@@ -2,36 +2,5 @@ video: false
 
 defaults:
   - _self_
-
-scene:
-  gravity: [0.0, -9.8, 0.0]
-  particles:
-    low: [3.0, 0.0, 0.0]
-    high: [5.0, 5.0, 5.0]
-  grid:
-    size: [5.0, 5.0, 5.0]
-    resolution: [32, 32, 32]
-  rigidbodies: []
-
-sim:
-  type: flip_pic
-  dt: 0.0166666667
-  substeps: 2
-  steps: -1
-
-  # FLIP/PIC controls
-  flip_ratio: 0.95
-  separate_particles: true
-  num_particle_iters: 2
-  num_pressure_iters: 50
-  over_relaxation: 1.9
-  compensate_drift: true
-  collision_damping: 0.0
-
-  # Strategy selections reserved for future factory wiring.
-  strategies:
-    integrator: euler
-    transfer: flip_pic
-    pressure_solver: gauss_seidel
-    collision: boundary_only
-    separation: spatial_hash
+  - scene: scene_1
+  - sim: flip_pic

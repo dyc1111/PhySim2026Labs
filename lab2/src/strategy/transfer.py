@@ -80,30 +80,39 @@ class FlipTransferStrategy(TransferStrategyBase):
                             and 0 <= jh + dj < ny
                             and 0 <= kh + dk < nz
                         ):
-                            self.scene.grid_u_num[i + di, jh + dj, kh + dk] += (
-                                wu * vel[0]
+                            ti.atomic_add(
+                                self.scene.grid_u_num[i + di, jh + dj, kh + dk],
+                                wu * vel[0],
                             )
-                            self.scene.grid_u_denom[i + di, jh + dj, kh + dk] += wu
+                            ti.atomic_add(
+                                self.scene.grid_u_denom[i + di, jh + dj, kh + dk], wu
+                            )
 
                         if (
                             0 <= ih + di < nx
                             and 0 <= j + dj < ny + 1
                             and 0 <= kh + dk < nz
                         ):
-                            self.scene.grid_v_num[ih + di, j + dj, kh + dk] += (
-                                wv * vel[1]
+                            ti.atomic_add(
+                                self.scene.grid_v_num[ih + di, j + dj, kh + dk],
+                                wv * vel[1],
                             )
-                            self.scene.grid_v_denom[ih + di, j + dj, kh + dk] += wv
+                            ti.atomic_add(
+                                self.scene.grid_v_denom[ih + di, j + dj, kh + dk], wv
+                            )
 
                         if (
                             0 <= ih + di < nx
                             and 0 <= jh + dj < ny
                             and 0 <= k + dk < nz + 1
                         ):
-                            self.scene.grid_w_num[ih + di, jh + dj, k + dk] += (
-                                ww * vel[2]
+                            ti.atomic_add(
+                                self.scene.grid_w_num[ih + di, jh + dj, k + dk],
+                                ww * vel[2],
                             )
-                            self.scene.grid_w_denom[ih + di, jh + dj, k + dk] += ww
+                            ti.atomic_add(
+                                self.scene.grid_w_denom[ih + di, jh + dj, k + dk], ww
+                            )
 
         for I in ti.grouped(self.scene.grid_u_num):
             self.scene.grid_u[I] = self.scene.grid_u_num[I] / self.scene.grid_u_denom[I]

@@ -20,7 +20,7 @@ class GaussSeidel(DivergenceStrategyBase):
         self.compensate_drift = compensate_drift
 
     @ti.kernel
-    def _gauss_seidel_color(self, color: ti.i32):  # type: ignore
+    def _gauss_seidel_mod2(self, color: ti.i32):  # type: ignore
         nx, ny, nz = self.scene.grid_resolution
         for I in ti.grouped(self.scene.grid_cell_type):
             x, y, z = I
@@ -74,9 +74,9 @@ class GaussSeidel(DivergenceStrategyBase):
                 continue
             divergence = self.over_relaxation * divergence
             if self.compensate_drift:
-                if self.scene.grid_particle_num[I] > self.scene.avg_density[None]:
+                if self.scene.grid_density[I] > self.scene.avg_density[None]:
                     divergence -= (
-                        self.scene.grid_particle_num[I] - self.scene.avg_density[None]
+                        self.scene.grid_density[I] - self.scene.avg_density[None]
                     )
 
             delta = divergence / num_cells
@@ -95,5 +95,5 @@ class GaussSeidel(DivergenceStrategyBase):
 
     def handle_divergence(self, dt):
         for _ in range(self.num_iters):
-            self._gauss_seidel_color(0)
-            self._gauss_seidel_color(1)
+            self._gauss_seidel_mod2(0)
+            self._gauss_seidel_mod2(1)
