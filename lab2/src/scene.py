@@ -214,7 +214,7 @@ class Scene:
         for I in ti.grouped(self.grid_cell_type):
             if self.grid_cell_type[I] == CellType.CELL_WATER.value:
                 ti.atomic_add(self.num_water_grid[None], 1)
-        print(f"water_grids: {self.num_water_grid[None]}")
+        # print(f"water_grids: {self.num_water_grid[None]}")
 
     @ti.kernel
     def _initialize_rigidbodies(self):

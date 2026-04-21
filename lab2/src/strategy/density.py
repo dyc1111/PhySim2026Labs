@@ -15,10 +15,16 @@ class DensityStrategy(DensityStrategyBase):
 
     def handle_density(self):
         self.scene.update_cell_type()
-        self.scene.avg_density[None] = float(self.scene.num_particles) / float(
+        if self.scene.avg_density[None] == 0.0:
+            self.scene.avg_density[None] = float(self.scene.num_particles) / float(
+                self.scene.num_water_grid[None]
+            )
+        current = float(self.scene.num_particles) / float(
             self.scene.num_water_grid[None]
         )
-        print(f"density: {self.scene.avg_density[None]}")
+        print(
+            f"density: current={current:.3f} rest={self.scene.avg_density[None]:.3f}"
+        )
 
 
 class NoOpDensityStrategy(DensityStrategyBase):
