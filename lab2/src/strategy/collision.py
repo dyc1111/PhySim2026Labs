@@ -50,23 +50,23 @@ class CollisionStrategy(CollisionStrategyBase):
             vel = self.scene.particle_vel[p]
             radius = self.scene.particle_radius
 
-            if pos[0] < radius:
-                pos[0] = radius
+            if pos[0] < radius + dx:
+                pos[0] = radius + dx
                 vel[0] = 0
-            if pos[0] > x - radius:
-                pos[0] = x - radius
+            if pos[0] > x - dx - radius:
+                pos[0] = x - dx - radius
                 vel[0] = 0
-            if pos[1] < radius:
-                pos[1] = radius
+            if pos[1] < radius + dy:
+                pos[1] = radius + dy
                 vel[1] = 0
-            if pos[1] > y - radius:
-                pos[1] = y - radius
+            if pos[1] > y - dy - radius:
+                pos[1] = y - dy - radius
                 vel[1] = 0
-            if pos[2] < radius:
-                pos[2] = radius
+            if pos[2] < radius + dz:
+                pos[2] = radius + dz
                 vel[2] = 0
-            if pos[2] > z - radius:
-                pos[2] = z - radius
+            if pos[2] > z - dz - radius:
+                pos[2] = z - dz - radius
                 vel[2] = 0
 
             cx = ti.cast(ti.floor(pos[0] / dx), ti.i32)

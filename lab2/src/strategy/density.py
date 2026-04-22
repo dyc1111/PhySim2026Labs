@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import taichi as ti
 from scene import Scene
+from constants import CellType
 
 
 class DensityStrategyBase(ABC):
@@ -53,9 +54,20 @@ class DensityStrategy(DensityStrategyBase):
                                 self.scene.grid_density[ih + di, jh + dj, kh + dk], w
                             )
 
+    @ti.kernel
+    def _init_density(self):
+        for I in ti.grouped(self.scene.grid_density):
+            if self.scene.grid_cell_type[I] == CellType.CELL_WATER.value:
+                ti.atomic_add(self.scene.density_sum[None], self.scene.grid_density[I])
+        self.scene.avg_density[None] = (
+            self.scene.density_sum[None] / self.scene.num_water_grid[None]
+        )
+
     def handle_density(self):
         self.scene.update_cell_type()
         self._calc_density()
+        if self.scene.avg_density[None] == 0:
+            self._init_density()
 
 
 class NoOpDensityStrategy(DensityStrategyBase):

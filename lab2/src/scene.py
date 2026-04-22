@@ -1,7 +1,7 @@
 import numpy as np
 import taichi as ti
 import math
-from constants import CellType, particle_offset, bbox_verts, bbox_indices
+from constants import CellType, bbox_verts, bbox_indices
 from util import HashTable
 
 
@@ -75,7 +75,8 @@ class Scene:
         )
         self.num_water_grid = ti.field(dtype=ti.i32, shape=())
         self.avg_density = ti.field(dtype=ti.f32, shape=())
-        self.avg_density[None] = 8
+        self.density_sum = ti.field(dtype=ti.f32, shape=())
+        self.avg_density[None] = 0
 
         self._initialize_particles()
         self.update_cell_type()
@@ -137,7 +138,11 @@ class Scene:
 
     def _init_bbox(self):
         sx, sy, sz = self.grid_size
+        sx -= 2 * self.grid_dx
+        sy -= 2 * self.grid_dy
+        sz -= 2 * self.grid_dz
         verts = bbox_verts * np.array([sx, sy, sz], dtype=np.float32).reshape(1, -1)
+        verts += np.ones_like(verts) * self.grid_dx
         self.bbox_vertices.from_numpy(verts)
         self.bbox_indices.from_numpy(bbox_indices)
 
@@ -146,31 +151,53 @@ class Scene:
         range_high = np.array(particles_cfg["high"], dtype=np.float32)
         assert np.all(
             range_low <= range_high
-        ), "scene.particles.range_low must be <= range_high"
+        ), "scene.particles.low must be <= scene.particles.high"
 
-        nx, ny, nz = self.grid_resolution
+        r = self.particle_radius
+        a = 2.0 * r
+        row_pitch = math.sqrt(3.0) * 0.5 * a
+        layer_pitch = math.sqrt(2.0 / 3.0) * a
+        layer_y_shift = row_pitch / 3.0
+        eps = 1e-6
+
+        # Keep initialization away from the 1-cell solid boundary shell.
+        domain_low = np.array(
+            [self.grid_dx + r, self.grid_dy + r, self.grid_dz + r], dtype=np.float32
+        )
+        domain_high = np.array(
+            [
+                self.grid_size[0] - self.grid_dx - r,
+                self.grid_size[1] - self.grid_dy - r,
+                self.grid_size[2] - self.grid_dz - r,
+            ],
+            dtype=np.float32,
+        )
+        spawn_low = np.maximum(range_low, domain_low)
+        spawn_high = np.minimum(range_high, domain_high)
+
+        if np.any(spawn_low > spawn_high):
+            return np.zeros((0, 3), dtype=np.float32)
+
         positions = []
-        for i in range(1, nx - 1):
-            cx = (i + 0.5) * self.grid_dx
-            if cx < range_low[0] or cx > range_high[0]:
-                continue
-            for j in range(1, ny - 1):
-                cy = (j + 0.5) * self.grid_dy
-                if cy < range_low[1] or cy > range_high[1]:
-                    continue
-                for k in range(1, nz - 1):
-                    cz = (k + 0.5) * self.grid_dz
-                    if cz < range_low[2] or cz > range_high[2]:
-                        continue
+        layer_idx = 0
+        z = float(spawn_low[2])
+        while z <= float(spawn_high[2]) + eps:
+            layer_shift_x = 0.5 * a if (layer_idx & 1) else 0.0
+            layer_shift_y = layer_y_shift if (layer_idx & 1) else 0.0
 
-                    for ox, oy, oz in particle_offset:
-                        positions.append(
-                            [
-                                (i + ox) * self.grid_dx,
-                                (j + oy) * self.grid_dy,
-                                (k + oz) * self.grid_dz,
-                            ]
-                        )
+            row_idx = 0
+            y = float(spawn_low[1]) + layer_shift_y
+            while y <= float(spawn_high[1]) + eps:
+                row_shift_x = 0.5 * a if (row_idx & 1) else 0.0
+                x = float(spawn_low[0]) + layer_shift_x + row_shift_x
+                while x <= float(spawn_high[0]) + eps:
+                    positions.append([x, y, z])
+                    x += a
+                row_idx += 1
+                y = float(spawn_low[1]) + layer_shift_y + row_idx * row_pitch
+
+            layer_idx += 1
+            z = float(spawn_low[2]) + layer_idx * layer_pitch
 
         return np.array(positions, dtype=np.float32)
 
