@@ -49,6 +49,29 @@ class RigidBody:
     def get_local_mesh(self):
         raise NotImplementedError
 
+    def intersects_grid_cells(
+        self,
+        cell_centers_world: np.ndarray,
+        position: np.ndarray,
+        rotation: np.ndarray,
+        inflate: float,
+    ) -> np.ndarray:
+        raise NotImplementedError
+
+    def sample_solid_velocity(
+        self,
+        points_world: np.ndarray,
+        position: np.ndarray,
+        linear_velocity: np.ndarray,
+        angular_velocity: np.ndarray,
+    ) -> np.ndarray:
+        if points_world.shape[0] == 0:
+            return np.zeros((0, 3), dtype=np.float32)
+        rel = points_world - position.reshape(1, 3)
+        omega = np.broadcast_to(angular_velocity.reshape(1, 3), rel.shape)
+        vel = linear_velocity.reshape(1, 3) + np.cross(omega, rel)
+        return vel.astype(np.float32)
+
 
 class Cuboid(RigidBody):
     type_name = "cuboid"
@@ -75,6 +98,21 @@ class Cuboid(RigidBody):
     def get_local_mesh(self):
         return (CUBE_LOCAL_VERTS_NP * self.half_extent.reshape(1, 3), CUBE_INDICES_NP)
 
+    def intersects_grid_cells(
+        self,
+        cell_centers_world: np.ndarray,
+        position: np.ndarray,
+        rotation: np.ndarray,
+        inflate: float,
+    ) -> np.ndarray:
+        rel = cell_centers_world - position.reshape(1, 3)
+        local = (rotation.T @ rel.T).T
+        q = np.abs(local) - self.half_extent.reshape(1, 3)
+        outside = np.maximum(q, 0.0)
+        outside_dist = np.linalg.norm(outside, axis=1)
+        inside_dist = np.minimum(np.maximum(q[:, 0], np.maximum(q[:, 1], q[:, 2])), 0.0)
+        return outside_dist + inside_dist <= float(inflate)
+
 
 class Sphere(RigidBody):
     type_name = "sphere"
@@ -96,6 +134,18 @@ class Sphere(RigidBody):
 
     def get_local_mesh(self):
         return (SPHERE_LOCAL_VERTS_NP * self.radius, SPHERE_INDICES_NP)
+
+    def intersects_grid_cells(
+        self,
+        cell_centers_world: np.ndarray,
+        position: np.ndarray,
+        rotation: np.ndarray,
+        inflate: float,
+    ) -> np.ndarray:
+        del rotation
+        rel = cell_centers_world - position.reshape(1, 3)
+        dist = np.linalg.norm(rel, axis=1)
+        return dist <= float(self.radius + inflate)
 
 
 class Cylinder(RigidBody):
@@ -121,6 +171,23 @@ class Cylinder(RigidBody):
     def get_local_mesh(self):
         scale = np.array([self.radius, self.radius, self.height], dtype=np.float32)
         return (CYLINDER_LOCAL_VERTS_NP * scale.reshape(1, 3), CYLINDER_INDICES_NP)
+
+    def intersects_grid_cells(
+        self,
+        cell_centers_world: np.ndarray,
+        position: np.ndarray,
+        rotation: np.ndarray,
+        inflate: float,
+    ) -> np.ndarray:
+        rel = cell_centers_world - position.reshape(1, 3)
+        local = (rotation.T @ rel.T).T
+        radial = np.sqrt(local[:, 0] ** 2 + local[:, 1] ** 2)
+        d0 = radial - self.radius
+        d1 = np.abs(local[:, 2]) - 0.5 * self.height
+        outside = np.stack([np.maximum(d0, 0.0), np.maximum(d1, 0.0)], axis=1)
+        outside_dist = np.linalg.norm(outside, axis=1)
+        inside_dist = np.minimum(np.maximum(d0, d1), 0.0)
+        return outside_dist + inside_dist <= float(inflate)
 
 
 RIGIDBODY_TYPE_TO_CLASS = {

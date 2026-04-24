@@ -3,25 +3,20 @@ import numpy as np
 import taichi as ti
 
 from constants import CellType, bbox_indices, bbox_verts
-from rigidbody import Cuboid, Cylinder, Sphere, create_rigid_body
-from util import HashTable
+from rigidbody import create_rigid_body
+from util import HashTable, skew_symmetric
 
 
 @ti.data_oriented
 class Scene:
-    SHAPE_NONE = 0
-    SHAPE_SPHERE = 1
-    SHAPE_CUBOID = 2
-    SHAPE_CYLINDER = 3
-
     def __init__(self, scene_cfg):
         gravity = np.array(scene_cfg["gravity"], dtype=np.float32)
         self.gravity = ti.Vector([gravity[0], gravity[1], gravity[2]])
         particles_cfg = scene_cfg["particles"]
         grid_cfg = scene_cfg["grid"]
-        obj_cfg = scene_cfg["object"]
+        obj_cfg = scene_cfg.get("object", [])
         if obj_cfg is None:
-            obj_cfg = {}
+            obj_cfg = []
 
         self._init_grid(grid_cfg)
         self._init_rigidbody(obj_cfg)
@@ -55,8 +50,6 @@ class Scene:
         self.grid_v_denom = ti.field(dtype=ti.f32, shape=(nx, ny + 1, nz))
         self.grid_w_denom = ti.field(dtype=ti.f32, shape=(nx, ny, nz + 1))
 
-        self.grid_pressure = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
-        self.grid_divergence = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
         self.grid_density = ti.field(dtype=ti.f32, shape=(nx, ny, nz))
         self.grid_cell_type = ti.field(dtype=ti.i32, shape=(nx, ny, nz))
         self.grid_solid_velocity = ti.Vector.field(3, dtype=ti.f32, shape=(nx, ny, nz))
@@ -64,8 +57,37 @@ class Scene:
         self.bbox_vertices = ti.Vector.field(3, dtype=ti.f32, shape=8)
         self.bbox_indices = ti.field(dtype=ti.i32, shape=24)
 
+        self._init_cell_type_cache()
         self._initialize_grid()
         self._init_bbox()
+
+    def _init_cell_type_cache(self):
+        nx, ny, nz = self.grid_resolution
+
+        x = (np.arange(nx, dtype=np.float32) + 0.5) * self.grid_dx
+        y = (np.arange(ny, dtype=np.float32) + 0.5) * self.grid_dy
+        z = (np.arange(nz, dtype=np.float32) + 0.5) * self.grid_dz
+        xx, yy, zz = np.meshgrid(x, y, z, indexing="ij")
+        centers = np.stack([xx, yy, zz], axis=-1).astype(np.float32)
+        self._grid_cell_centers_flat = centers.reshape(-1, 3)
+
+        cell_type_base = np.full((nx, ny, nz), CellType.CELL_AIR.value, dtype=np.int32)
+        cell_type_base[0, :, :] = CellType.CELL_SOLID.value
+        cell_type_base[nx - 1, :, :] = CellType.CELL_SOLID.value
+        cell_type_base[:, 0, :] = CellType.CELL_SOLID.value
+        cell_type_base[:, ny - 1, :] = CellType.CELL_SOLID.value
+        cell_type_base[:, :, 0] = CellType.CELL_SOLID.value
+        cell_type_base[:, :, nz - 1] = CellType.CELL_SOLID.value
+        self._grid_cell_type_base = cell_type_base
+
+        self._grid_cell_inflate = np.float32(
+            0.5
+            * math.sqrt(
+                self.grid_dx * self.grid_dx
+                + self.grid_dy * self.grid_dy
+                + self.grid_dz * self.grid_dz
+            )
+        )
 
     def _init_particle(self, particles_cfg):
         self.particle_radius = self.grid_dx * 0.25
@@ -113,13 +135,6 @@ class Scene:
         self.rigid_inv_inertia_body = ti.Matrix.field(
             3, 3, dtype=ti.f32, shape=self.rigidbody_capacity
         )
-        self.rigid_dynamic = ti.field(dtype=ti.i32, shape=self.rigidbody_capacity)
-        self.rigid_shape_type = ti.field(dtype=ti.i32, shape=self.rigidbody_capacity)
-        self.rigid_radius = ti.field(dtype=ti.f32, shape=self.rigidbody_capacity)
-        self.rigid_height = ti.field(dtype=ti.f32, shape=self.rigidbody_capacity)
-        self.rigid_half_extent = ti.Vector.field(
-            3, dtype=ti.f32, shape=self.rigidbody_capacity
-        )
         self.rigid_count = ti.field(dtype=ti.i32, shape=())
         self.rigid_count[None] = self.num_rigidbodies
 
@@ -163,10 +178,8 @@ class Scene:
             self.grid_w_num[I] = 0.0
             self.grid_w_denom[I] = 0.0
 
-        for I in ti.grouped(self.grid_pressure):
+        for I in ti.grouped(self.grid_density):
             i, j, k = I
-            self.grid_pressure[I] = 0.0
-            self.grid_divergence[I] = 0.0
             self.grid_density[I] = 0.0
             self.grid_solid_velocity[I] = ti.Vector([0.0, 0.0, 0.0])
             if i == 0 or i == nx - 1 or j == 0 or j == ny - 1 or k == 0 or k == nz - 1:
@@ -192,11 +205,6 @@ class Scene:
             self.rigid_inv_mass[i] = 0.0
             self.rigid_inertia_body[i] = ti.Matrix.identity(ti.f32, 3)
             self.rigid_inv_inertia_body[i] = ti.Matrix.zero(ti.f32, 3, 3)
-            self.rigid_dynamic[i] = 0
-            self.rigid_shape_type[i] = self.SHAPE_NONE
-            self.rigid_radius[i] = 0.0
-            self.rigid_height[i] = 0.0
-            self.rigid_half_extent[i] = ti.Vector([0.0, 0.0, 0.0])
 
     def _load_rigidbodies(self):
         cap = self.rigidbody_capacity
@@ -208,11 +216,6 @@ class Scene:
         inv_mass = np.zeros((cap,), dtype=np.float32)
         inertia_body = np.tile(np.eye(3, dtype=np.float32), (cap, 1, 1))
         inv_inertia_body = np.zeros((cap, 3, 3), dtype=np.float32)
-        dynamic = np.zeros((cap,), dtype=np.int32)
-        shape_type = np.zeros((cap,), dtype=np.int32)
-        radius = np.zeros((cap,), dtype=np.float32)
-        height = np.zeros((cap,), dtype=np.float32)
-        half_extent = np.zeros((cap, 3), dtype=np.float32)
 
         for i, body in enumerate(self.rigid_bodies):
             pos[i] = body.position
@@ -221,35 +224,16 @@ class Scene:
             ang_vel[i] = body.angular_velocity
 
             if body.inv_mass > 0.0:
-                dynamic[i] = 1
                 mass[i] = float(body.mass)
                 inv_mass[i] = float(body.inv_mass)
                 inertia_diag = body.get_inertia_diag()
                 inertia_body[i] = np.diag(inertia_diag)
                 inv_inertia_body[i] = np.diag(1.0 / np.maximum(inertia_diag, 1e-8))
             else:
-                dynamic[i] = 0
                 mass[i] = 0.0
                 inv_mass[i] = 0.0
                 inertia_body[i] = np.eye(3, dtype=np.float32)
                 inv_inertia_body[i] = np.zeros((3, 3), dtype=np.float32)
-
-            if isinstance(body, Sphere):
-                shape_type[i] = self.SHAPE_SPHERE
-                radius[i] = body.radius
-                half_extent[i] = np.array(
-                    [body.radius, body.radius, body.radius], dtype=np.float32
-                )
-            elif isinstance(body, Cuboid):
-                shape_type[i] = self.SHAPE_CUBOID
-                half_extent[i] = body.half_extent
-            elif isinstance(body, Cylinder):
-                shape_type[i] = self.SHAPE_CYLINDER
-                radius[i] = body.radius
-                height[i] = body.height
-                half_extent[i] = np.array(
-                    [body.radius, body.radius, 0.5 * body.height], dtype=np.float32
-                )
 
         self.rigid_pos.from_numpy(pos)
         self.rigid_vel.from_numpy(vel)
@@ -259,11 +243,6 @@ class Scene:
         self.rigid_inv_mass.from_numpy(inv_mass)
         self.rigid_inertia_body.from_numpy(inertia_body)
         self.rigid_inv_inertia_body.from_numpy(inv_inertia_body)
-        self.rigid_dynamic.from_numpy(dynamic)
-        self.rigid_shape_type.from_numpy(shape_type)
-        self.rigid_radius.from_numpy(radius)
-        self.rigid_height.from_numpy(height)
-        self.rigid_half_extent.from_numpy(half_extent)
 
     def _init_rigidbody_meshes(self):
         n = self.num_rigidbodies
@@ -399,81 +378,10 @@ class Scene:
 
         return np.array(positions, dtype=np.float32)
 
-    @ti.func
-    def _cell_center(self, i: ti.i32, j: ti.i32, k: ti.i32):  # type: ignore
-        return ti.Vector(
-            [
-                (ti.cast(i, ti.f32) + 0.5) * self.grid_dx,
-                (ti.cast(j, ti.f32) + 0.5) * self.grid_dy,
-                (ti.cast(k, ti.f32) + 0.5) * self.grid_dz,
-            ]
-        )
-
-    @ti.func
-    def _rigid_body_velocity(self, point_world, body_id):
-        rel = point_world - self.rigid_pos[body_id]
-        return self.rigid_vel[body_id] + self.rigid_ang_vel[body_id].cross(rel)
-
-    @ti.func
-    def _cell_intersects_rigidbody(self, point_world, body_id, inflate: ti.f32):  # type: ignore
-        intersects = False
-        shape_type = self.rigid_shape_type[body_id]
-        rel = point_world - self.rigid_pos[body_id]
-        local = self.rigid_rot[body_id].transpose() @ rel
-
-        if shape_type == self.SHAPE_SPHERE:
-            r = self.rigid_radius[body_id]
-            intersects = local.norm() <= r + inflate
-        elif shape_type == self.SHAPE_CUBOID:
-            he = self.rigid_half_extent[body_id]
-            q = ti.Vector(
-                [
-                    ti.abs(local[0]) - he[0],
-                    ti.abs(local[1]) - he[1],
-                    ti.abs(local[2]) - he[2],
-                ]
-            )
-            outside = ti.Vector(
-                [ti.max(q[0], 0.0), ti.max(q[1], 0.0), ti.max(q[2], 0.0)]
-            )
-            outside_dist = outside.norm()
-            inside_dist = ti.min(ti.max(q[0], ti.max(q[1], q[2])), 0.0)
-            intersects = outside_dist + inside_dist <= inflate
-        elif shape_type == self.SHAPE_CYLINDER:
-            r = self.rigid_radius[body_id]
-            h = self.rigid_height[body_id]
-            radial = ti.sqrt(local[0] * local[0] + local[1] * local[1])
-            d = ti.Vector([radial - r, ti.abs(local[2]) - 0.5 * h])
-            outside = ti.Vector([ti.max(d[0], 0.0), ti.max(d[1], 0.0)])
-            outside_dist = outside.norm()
-            inside_dist = ti.min(ti.max(d[0], d[1]), 0.0)
-            intersects = outside_dist + inside_dist <= inflate
-        return intersects
-
     @ti.kernel
-    def update_cell_type(self):
+    def _mark_water_cells(self):
         nx, ny, nz = self.grid_resolution
         self.num_water_grid[None] = 0
-        inflate = 0.5 * ti.sqrt(
-            self.grid_dx * self.grid_dx
-            + self.grid_dy * self.grid_dy
-            + self.grid_dz * self.grid_dz
-        )
-
-        for I in ti.grouped(self.grid_cell_type):
-            i, j, k = I
-            self.grid_solid_velocity[I] = ti.Vector([0.0, 0.0, 0.0])
-            if i == 0 or i == nx - 1 or j == 0 or j == ny - 1 or k == 0 or k == nz - 1:
-                self.grid_cell_type[I] = CellType.CELL_SOLID.value
-            else:
-                self.grid_cell_type[I] = CellType.CELL_AIR.value
-                center = self._cell_center(i, j, k)
-                for b in range(self.rigid_count[None]):
-                    if self._cell_intersects_rigidbody(center, b, inflate):
-                        self.grid_cell_type[I] = CellType.CELL_SOLID.value
-                        self.grid_solid_velocity[I] = self._rigid_body_velocity(
-                            center, b
-                        )
 
         for p in range(self.num_particles):
             x = ti.cast(ti.floor(self.particle_pos[p][0] / self.grid_dx), ti.i32)
@@ -489,9 +397,37 @@ class Scene:
             if self.grid_cell_type[I] == CellType.CELL_WATER.value:
                 ti.atomic_add(self.num_water_grid[None], 1)
 
-    @ti.func
-    def _get_skew_symmetric(self, v: ti.template()):  # type: ignore
-        return ti.Matrix([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+    def update_cell_type(self):
+        nx, ny, nz = self.grid_resolution
+        cell_type = self._grid_cell_type_base.copy()
+        solid_velocity = np.zeros((nx, ny, nz, 3), dtype=np.float32)
+
+        if self.num_rigidbodies > 0:
+            centers = self._grid_cell_centers_flat
+            cell_type_flat = cell_type.reshape(-1)
+            solid_velocity_flat = solid_velocity.reshape(-1, 3)
+            pos, vel, rot, ang_vel = self.get_rigidbody_state()
+
+            for body_id, body in enumerate(self.rigid_bodies):
+                mask = body.intersects_grid_cells(
+                    centers,
+                    pos[body_id],
+                    rot[body_id],
+                    self._grid_cell_inflate,
+                )
+                if not np.any(mask):
+                    continue
+                cell_type_flat[mask] = CellType.CELL_SOLID.value
+                solid_velocity_flat[mask] = body.sample_solid_velocity(
+                    centers[mask],
+                    pos[body_id],
+                    vel[body_id],
+                    ang_vel[body_id],
+                )
+
+        self.grid_cell_type.from_numpy(cell_type)
+        self.grid_solid_velocity.from_numpy(solid_velocity)
+        self._mark_water_cells()
 
     @ti.kernel
     def pre_solve_kinematics(
@@ -521,10 +457,10 @@ class Scene:
                 theta = dtheta.norm()
                 delta = ti.Matrix.identity(ti.f32, 3)
                 if theta < 1e-7:
-                    delta += self._get_skew_symmetric(dtheta)
+                    delta += skew_symmetric(dtheta)
                 else:
                     axis = dtheta / theta
-                    k = self._get_skew_symmetric(axis)
+                    k = skew_symmetric(axis)
                     delta += ti.sin(theta) * k + (1.0 - ti.cos(theta)) * (k @ k)
                 self.rigid_rot[i] = delta @ self.rigid_rot[i]
 
