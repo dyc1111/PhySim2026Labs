@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import taichi as ti
+import numpy as np
+from interaction import InteractionHandler
 from scene import Scene
 from strategy import *
 
@@ -19,6 +22,7 @@ class Simulator(ABC):
 
     def __init__(self, sim_cfg, scene: Scene):
         self.scene = scene
+        self.interaction_handler = InteractionHandler(scene)
         self.dt = float(sim_cfg["dt"])
         self.dt_min = 1e-4
         self.dt_max = 5e-2
@@ -92,10 +96,21 @@ class Simulator(ABC):
         self.scene_3d.ambient_light((0.6, 0.6, 0.6))
         self.scene_3d.point_light((5, 5, 5), (1.2, 1.2, 1.2))
 
+        if self.scene.num_rigidbodies > 0:
+            self.scene.update_rigidbody_mesh_vertices()
+            for i in range(self.scene.num_rigidbodies):
+                self.scene_3d.mesh(
+                    self.scene.mesh_vertices,
+                    self.scene.mesh_indices,
+                    color=tuple(self.scene.mesh_colors[i]),
+                    index_offset=int(self.scene.index_offset[i]),
+                    index_count=int(self.scene.index_count[i]),
+                )
+
         self.scene_3d.particles(
             self.scene.particle_pos,
             radius=self.scene.particle_radius * 0.6,
-            color=(0.1, 0.35, 0.95),
+            per_vertex_color=self.scene.particle_color,
         )
         self.scene_3d.lines(
             self.scene.bbox_vertices,
@@ -122,10 +137,13 @@ class Simulator(ABC):
                 break
 
             sdt = self.dt / float(self.substeps)
+            applied_forces, applied_torques = self.interaction_handler.process_inputs(
+                self.window, self.camera
+            )
 
             if not self.paused:
                 for _ in range(self.substeps):
-                    self._step(sdt)
+                    self._step(sdt, applied_forces, applied_torques)
                 step += 1
 
             if not self._render():
@@ -134,7 +152,12 @@ class Simulator(ABC):
         if self.video:
             self.video_manager.make_video(gif=False, mp4=True)
 
-    def _step(self, sdt: float) -> None:
+    def _step(
+        self, sdt: float, applied_forces: np.ndarray, applied_torques: np.ndarray
+    ):
+        if self.scene.num_rigidbodies > 0:
+            self.scene.pre_solve_kinematics(sdt, applied_forces, applied_torques)
+            self.scene.post_solve_kinematics(sdt)
         self.handle_advection(sdt)
         self.handle_collision()
         self.handle_separation()
@@ -170,7 +193,6 @@ class Simulator(ABC):
 class FlipPicSimulator(Simulator):
     def __init__(self, sim_cfg, scene: Scene):
         self.flip_ratio = float(sim_cfg["flip_ratio"])
-        self.collision_damping = float(sim_cfg["collision_damping"])
         self.separate_particles = bool(sim_cfg["separate_particles"])
         self.num_particle_iters = int(sim_cfg["num_particle_iters"])
         self.num_pressure_iters = int(sim_cfg["num_pressure_iters"])
@@ -185,7 +207,7 @@ class FlipPicSimulator(Simulator):
             separate = NoOpSeparationStrategy()
         return FluidStrategies(
             advection=EulerIntegration(self.scene),
-            collision=CollisionStrategy(self.scene, self.collision_damping),
+            collision=CollisionStrategy(self.scene),
             separation=separate,
             transfer=FlipTransferStrategy(self.scene, self.flip_ratio),
             density=DensityStrategy(self.scene),

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import taichi as ti
+from constants import CellType
 from scene import Scene
 
 
@@ -26,12 +27,15 @@ class FlipTransferStrategy(TransferStrategyBase):
         for I in ti.grouped(self.scene.grid_u_num):
             self.scene.grid_u_num[I] = 0.0
             self.scene.grid_u_denom[I] = eps
+            self.scene.grid_u_prev[I] = self.scene.grid_u[I]
         for I in ti.grouped(self.scene.grid_v_num):
             self.scene.grid_v_num[I] = 0.0
             self.scene.grid_v_denom[I] = eps
+            self.scene.grid_v_prev[I] = self.scene.grid_v[I]
         for I in ti.grouped(self.scene.grid_w_num):
             self.scene.grid_w_num[I] = 0.0
             self.scene.grid_w_denom[I] = eps
+            self.scene.grid_w_prev[I] = self.scene.grid_w[I]
 
         dx, dy, dz = self.scene.grid_dx, self.scene.grid_dy, self.scene.grid_dz
         nx, ny, nz = self.scene.grid_resolution
@@ -121,6 +125,26 @@ class FlipTransferStrategy(TransferStrategyBase):
         for I in ti.grouped(self.scene.grid_w_num):
             self.scene.grid_w[I] = self.scene.grid_w_num[I] / self.scene.grid_w_denom[I]
 
+        for I in ti.grouped(self.scene.grid_cell_type):
+            i, j, k = I
+            if self.scene.grid_cell_type[I] != CellType.CELL_SOLID.value:
+                continue
+            if (
+                i > 0
+                and self.scene.grid_cell_type[i - 1, j, k] == CellType.CELL_SOLID.value
+            ):
+                self.scene.grid_u[I] = self.scene.grid_u_prev[I]
+            if (
+                j > 0
+                and self.scene.grid_cell_type[i, j - 1, k] == CellType.CELL_SOLID.value
+            ):
+                self.scene.grid_v[I] = self.scene.grid_v_prev[I]
+            if (
+                k > 0
+                and self.scene.grid_cell_type[i, j, k - 1] == CellType.CELL_SOLID.value
+            ):
+                self.scene.grid_w[I] = self.scene.grid_w_prev[I]
+
         for I in ti.grouped(self.scene.grid_u):
             self.scene.grid_u_prev[I] = self.scene.grid_u[I]
         for I in ti.grouped(self.scene.grid_v):
@@ -162,6 +186,7 @@ class FlipTransferStrategy(TransferStrategyBase):
             u_num_pic, v_num_pic, w_num_pic = 0.0, 0.0, 0.0
             u_num_flip, v_num_flip, w_num_flip = 0.0, 0.0, 0.0
             u_denom, v_denom, w_denom = 1e-8, 1e-8, 1e-8
+
             for di in range(2):
                 for dj in range(2):
                     for dk in range(2):

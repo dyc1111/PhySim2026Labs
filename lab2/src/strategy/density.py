@@ -64,11 +64,44 @@ class DensityStrategy(DensityStrategyBase):
             self.scene.density_sum[None] / self.scene.num_water_grid[None]
         )
 
+    @ti.kernel
+    def _update_particle_color(self):
+        nx, ny, nz = self.scene.grid_resolution
+        for p in range(self.scene.num_particles):
+            color = self.scene.particle_color[p]
+            fade = 0.01
+            color[0] = ti.max(0.0, color[0] - fade)
+            color[1] = ti.max(0.0, color[1] - fade)
+            color[2] = ti.min(1.0, color[2] + fade)
+
+            x = ti.cast(
+                ti.floor(self.scene.particle_pos[p][0] / self.scene.grid_dx), ti.i32
+            )
+            y = ti.cast(
+                ti.floor(self.scene.particle_pos[p][1] / self.scene.grid_dy), ti.i32
+            )
+            z = ti.cast(
+                ti.floor(self.scene.particle_pos[p][2] / self.scene.grid_dz), ti.i32
+            )
+            x = ti.max(1, ti.min(nx - 2, x))
+            y = ti.max(1, ti.min(ny - 2, y))
+            z = ti.max(1, ti.min(nz - 2, z))
+
+            d0 = self.scene.avg_density[None]
+            if d0 > 0.0:
+                rel_density = self.scene.grid_density[x, y, z] / d0
+                if rel_density < 0.7:
+                    color[0] = 0.6
+                    color[1] = 0.6
+                    color[2] = 1.0
+
+            self.scene.particle_color[p] = color
+
     def handle_density(self):
-        self.scene.update_cell_type()
         self._calc_density()
         if self.scene.avg_density[None] == 0:
             self._init_density()
+        self._update_particle_color()
 
 
 class NoOpDensityStrategy(DensityStrategyBase):

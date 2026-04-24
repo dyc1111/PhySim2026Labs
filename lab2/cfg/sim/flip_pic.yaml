@@ -8,4 +8,3 @@ num_particle_iters: 2
 num_pressure_iters: 50
 over_relaxation: 1.9
 compensate_drift: true
-collision_damping: 0.0

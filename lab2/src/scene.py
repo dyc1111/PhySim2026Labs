@@ -1,22 +1,31 @@
+import math
 import numpy as np
 import taichi as ti
-import math
-from constants import CellType, bbox_verts, bbox_indices
+
+from constants import CellType, bbox_indices, bbox_verts
+from rigidbody import Cuboid, Cylinder, Sphere, create_rigid_body
 from util import HashTable
 
 
 @ti.data_oriented
 class Scene:
+    SHAPE_NONE = 0
+    SHAPE_SPHERE = 1
+    SHAPE_CUBOID = 2
+    SHAPE_CYLINDER = 3
+
     def __init__(self, scene_cfg):
         gravity = np.array(scene_cfg["gravity"], dtype=np.float32)
         self.gravity = ti.Vector([gravity[0], gravity[1], gravity[2]])
         particles_cfg = scene_cfg["particles"]
         grid_cfg = scene_cfg["grid"]
-        rigid_cfg = scene_cfg["rigidbodies"]
+        obj_cfg = scene_cfg["object"]
+        if obj_cfg is None:
+            obj_cfg = {}
 
         self._init_grid(grid_cfg)
+        self._init_rigidbody(obj_cfg)
         self._init_particle(particles_cfg)
-        self._init_rigidbody(rigid_cfg)
 
     def _init_grid(self, grid_cfg):
         self.grid_size = tuple(float(x) for x in grid_cfg["size"])
@@ -69,6 +78,7 @@ class Scene:
         self.particle_init_pos.from_numpy(positions)
         self.particle_pos = ti.Vector.field(3, dtype=ti.f32, shape=self.num_particles)
         self.particle_vel = ti.Vector.field(3, dtype=ti.f32, shape=self.num_particles)
+        self.particle_color = ti.Vector.field(3, dtype=ti.f32, shape=self.num_particles)
 
         self.hashtable = HashTable(
             self.grid_size, self.particle_radius, self.num_particles
@@ -76,36 +86,63 @@ class Scene:
         self.num_water_grid = ti.field(dtype=ti.i32, shape=())
         self.avg_density = ti.field(dtype=ti.f32, shape=())
         self.density_sum = ti.field(dtype=ti.f32, shape=())
-        self.avg_density[None] = 0
+        self.avg_density[None] = 0.0
+        self.density_sum[None] = 0.0
 
         self._initialize_particles()
         self.update_cell_type()
 
-    def _init_rigidbody(self, rigid_cfg):
-        self.num_rigidbodies = len(rigid_cfg)
+    def _init_rigidbody(self, obj_cfg):
+        self.rigid_bodies = [create_rigid_body(cfg) for cfg in obj_cfg]
+        self.num_rigidbodies = len(self.rigid_bodies)
         self.rigidbody_capacity = max(1, self.num_rigidbodies)
 
         self.rigid_pos = ti.Vector.field(3, dtype=ti.f32, shape=self.rigidbody_capacity)
         self.rigid_vel = ti.Vector.field(3, dtype=ti.f32, shape=self.rigidbody_capacity)
-        self.rigid_orientation = ti.Vector.field(
-            4, dtype=ti.f32, shape=self.rigidbody_capacity
+        self.rigid_rot = ti.Matrix.field(
+            3, 3, dtype=ti.f32, shape=self.rigidbody_capacity
         )
-        self.rigid_angular_vel = ti.Vector.field(
+        self.rigid_ang_vel = ti.Vector.field(
             3, dtype=ti.f32, shape=self.rigidbody_capacity
         )
+        self.rigid_mass = ti.field(dtype=ti.f32, shape=self.rigidbody_capacity)
+        self.rigid_inv_mass = ti.field(dtype=ti.f32, shape=self.rigidbody_capacity)
+        self.rigid_inertia_body = ti.Matrix.field(
+            3, 3, dtype=ti.f32, shape=self.rigidbody_capacity
+        )
+        self.rigid_inv_inertia_body = ti.Matrix.field(
+            3, 3, dtype=ti.f32, shape=self.rigidbody_capacity
+        )
         self.rigid_dynamic = ti.field(dtype=ti.i32, shape=self.rigidbody_capacity)
-
-        # Shape tags reserved for future fluid-solid coupling:
-        # 0: none, 1: sphere, 2: box, 3: capsule, ...
         self.rigid_shape_type = ti.field(dtype=ti.i32, shape=self.rigidbody_capacity)
         self.rigid_radius = ti.field(dtype=ti.f32, shape=self.rigidbody_capacity)
+        self.rigid_height = ti.field(dtype=ti.f32, shape=self.rigidbody_capacity)
         self.rigid_half_extent = ti.Vector.field(
             3, dtype=ti.f32, shape=self.rigidbody_capacity
         )
-
         self.rigid_count = ti.field(dtype=ti.i32, shape=())
         self.rigid_count[None] = self.num_rigidbodies
+
+        self.rigid_init_pos = ti.Vector.field(
+            3, dtype=ti.f32, shape=self.rigidbody_capacity
+        )
+        self.rigid_init_vel = ti.Vector.field(
+            3, dtype=ti.f32, shape=self.rigidbody_capacity
+        )
+        self.rigid_init_rot = ti.Matrix.field(
+            3, 3, dtype=ti.f32, shape=self.rigidbody_capacity
+        )
+        self.rigid_init_ang_vel = ti.Vector.field(
+            3, dtype=ti.f32, shape=self.rigidbody_capacity
+        )
+
         self._initialize_rigidbodies()
+        self._load_rigidbodies()
+        self.rigid_init_pos.copy_from(self.rigid_pos)
+        self.rigid_init_vel.copy_from(self.rigid_vel)
+        self.rigid_init_rot.copy_from(self.rigid_rot)
+        self.rigid_init_ang_vel.copy_from(self.rigid_ang_vel)
+        self._init_rigidbody_meshes()
 
     @ti.kernel
     def _initialize_grid(self):
@@ -125,16 +162,179 @@ class Scene:
             self.grid_w_prev[I] = 0.0
             self.grid_w_num[I] = 0.0
             self.grid_w_denom[I] = 0.0
+
         for I in ti.grouped(self.grid_pressure):
+            i, j, k = I
             self.grid_pressure[I] = 0.0
             self.grid_divergence[I] = 0.0
             self.grid_density[I] = 0.0
-            i, j, k = I[0], I[1], I[2]
+            self.grid_solid_velocity[I] = ti.Vector([0.0, 0.0, 0.0])
             if i == 0 or i == nx - 1 or j == 0 or j == ny - 1 or k == 0 or k == nz - 1:
                 self.grid_cell_type[I] = CellType.CELL_SOLID.value
             else:
                 self.grid_cell_type[I] = CellType.CELL_AIR.value
-            self.grid_solid_velocity[I] = ti.Vector([0.0, 0.0, 0.0])
+
+    @ti.kernel
+    def _initialize_particles(self):
+        for p in range(self.num_particles):
+            self.particle_pos[p] = self.particle_init_pos[p]
+            self.particle_vel[p] = ti.Vector([0.0, 0.0, 0.0])
+            self.particle_color[p] = ti.Vector([0.0, 0.0, 1.0])
+
+    @ti.kernel
+    def _initialize_rigidbodies(self):
+        for i in range(self.rigidbody_capacity):
+            self.rigid_pos[i] = ti.Vector([0.0, 0.0, 0.0])
+            self.rigid_vel[i] = ti.Vector([0.0, 0.0, 0.0])
+            self.rigid_rot[i] = ti.Matrix.identity(ti.f32, 3)
+            self.rigid_ang_vel[i] = ti.Vector([0.0, 0.0, 0.0])
+            self.rigid_mass[i] = 0.0
+            self.rigid_inv_mass[i] = 0.0
+            self.rigid_inertia_body[i] = ti.Matrix.identity(ti.f32, 3)
+            self.rigid_inv_inertia_body[i] = ti.Matrix.zero(ti.f32, 3, 3)
+            self.rigid_dynamic[i] = 0
+            self.rigid_shape_type[i] = self.SHAPE_NONE
+            self.rigid_radius[i] = 0.0
+            self.rigid_height[i] = 0.0
+            self.rigid_half_extent[i] = ti.Vector([0.0, 0.0, 0.0])
+
+    def _load_rigidbodies(self):
+        cap = self.rigidbody_capacity
+        pos = np.zeros((cap, 3), dtype=np.float32)
+        vel = np.zeros((cap, 3), dtype=np.float32)
+        rot = np.tile(np.eye(3, dtype=np.float32), (cap, 1, 1))
+        ang_vel = np.zeros((cap, 3), dtype=np.float32)
+        mass = np.zeros((cap,), dtype=np.float32)
+        inv_mass = np.zeros((cap,), dtype=np.float32)
+        inertia_body = np.tile(np.eye(3, dtype=np.float32), (cap, 1, 1))
+        inv_inertia_body = np.zeros((cap, 3, 3), dtype=np.float32)
+        dynamic = np.zeros((cap,), dtype=np.int32)
+        shape_type = np.zeros((cap,), dtype=np.int32)
+        radius = np.zeros((cap,), dtype=np.float32)
+        height = np.zeros((cap,), dtype=np.float32)
+        half_extent = np.zeros((cap, 3), dtype=np.float32)
+
+        for i, body in enumerate(self.rigid_bodies):
+            pos[i] = body.position
+            vel[i] = body.velocity
+            rot[i] = body.rotation
+            ang_vel[i] = body.angular_velocity
+
+            if body.inv_mass > 0.0:
+                dynamic[i] = 1
+                mass[i] = float(body.mass)
+                inv_mass[i] = float(body.inv_mass)
+                inertia_diag = body.get_inertia_diag()
+                inertia_body[i] = np.diag(inertia_diag)
+                inv_inertia_body[i] = np.diag(1.0 / np.maximum(inertia_diag, 1e-8))
+            else:
+                dynamic[i] = 0
+                mass[i] = 0.0
+                inv_mass[i] = 0.0
+                inertia_body[i] = np.eye(3, dtype=np.float32)
+                inv_inertia_body[i] = np.zeros((3, 3), dtype=np.float32)
+
+            if isinstance(body, Sphere):
+                shape_type[i] = self.SHAPE_SPHERE
+                radius[i] = body.radius
+                half_extent[i] = np.array(
+                    [body.radius, body.radius, body.radius], dtype=np.float32
+                )
+            elif isinstance(body, Cuboid):
+                shape_type[i] = self.SHAPE_CUBOID
+                half_extent[i] = body.half_extent
+            elif isinstance(body, Cylinder):
+                shape_type[i] = self.SHAPE_CYLINDER
+                radius[i] = body.radius
+                height[i] = body.height
+                half_extent[i] = np.array(
+                    [body.radius, body.radius, 0.5 * body.height], dtype=np.float32
+                )
+
+        self.rigid_pos.from_numpy(pos)
+        self.rigid_vel.from_numpy(vel)
+        self.rigid_rot.from_numpy(rot)
+        self.rigid_ang_vel.from_numpy(ang_vel)
+        self.rigid_mass.from_numpy(mass)
+        self.rigid_inv_mass.from_numpy(inv_mass)
+        self.rigid_inertia_body.from_numpy(inertia_body)
+        self.rigid_inv_inertia_body.from_numpy(inv_inertia_body)
+        self.rigid_dynamic.from_numpy(dynamic)
+        self.rigid_shape_type.from_numpy(shape_type)
+        self.rigid_radius.from_numpy(radius)
+        self.rigid_height.from_numpy(height)
+        self.rigid_half_extent.from_numpy(half_extent)
+
+    def _init_rigidbody_meshes(self):
+        n = self.num_rigidbodies
+        self._rb_local_vertices = []
+        self._rb_vertex_offsets = []
+        self._mesh_total_vertices = 0
+
+        if n == 0:
+            self.mesh_vertices = ti.Vector.field(3, dtype=ti.f32, shape=1)
+            self.mesh_indices = ti.field(dtype=ti.i32, shape=1)
+            self.mesh_colors = ti.Vector.field(3, dtype=ti.f32, shape=1)
+            self.index_offset = ti.field(dtype=ti.i32, shape=1)
+            self.index_count = ti.field(dtype=ti.i32, shape=1)
+            self.mesh_vertices[0] = ti.Vector([0.0, 0.0, 0.0])
+            self.mesh_indices[0] = 0
+            self.mesh_colors[0] = ti.Vector([0.0, 0.0, 0.0])
+            self.index_offset[0] = 0
+            self.index_count[0] = 0
+            return
+
+        total_vertices = 0
+        total_indices = 0
+        for body in self.rigid_bodies:
+            local_verts, local_indices = body.get_local_mesh()
+            self._rb_local_vertices.append(local_verts.astype(np.float32))
+            self._rb_vertex_offsets.append(total_vertices)
+            total_vertices += int(local_verts.shape[0])
+            total_indices += int(local_indices.shape[0])
+
+        self._mesh_total_vertices = total_vertices
+        self.mesh_vertices = ti.Vector.field(3, dtype=ti.f32, shape=total_vertices)
+        self.mesh_indices = ti.field(dtype=ti.i32, shape=total_indices)
+        self.mesh_colors = ti.Vector.field(3, dtype=ti.f32, shape=n)
+        self.index_offset = ti.field(dtype=ti.i32, shape=n)
+        self.index_count = ti.field(dtype=ti.i32, shape=n)
+
+        mesh_indices = np.zeros((total_indices,), dtype=np.int32)
+        mesh_colors = np.zeros((n, 3), dtype=np.float32)
+        index_offset = np.zeros((n,), dtype=np.int32)
+        index_count = np.zeros((n,), dtype=np.int32)
+
+        idx_cursor = 0
+        vtx_cursor = 0
+        for i, body in enumerate(self.rigid_bodies):
+            local_verts, local_indices = body.get_local_mesh()
+            count = int(local_indices.shape[0])
+            mesh_indices[idx_cursor : idx_cursor + count] = local_indices + vtx_cursor
+            index_offset[i] = idx_cursor
+            index_count[i] = count
+            mesh_colors[i] = body.color
+            idx_cursor += count
+            vtx_cursor += int(local_verts.shape[0])
+
+        self.mesh_indices.from_numpy(mesh_indices)
+        self.mesh_colors.from_numpy(mesh_colors)
+        self.index_offset.from_numpy(index_offset)
+        self.index_count.from_numpy(index_count)
+        self.update_rigidbody_mesh_vertices()
+
+    def update_rigidbody_mesh_vertices(self):
+        if self.num_rigidbodies == 0:
+            return
+        pos, _, rot, _ = self.get_rigidbody_state()
+        world_vertices = np.zeros((self._mesh_total_vertices, 3), dtype=np.float32)
+        for i, local_verts in enumerate(self._rb_local_vertices):
+            offset = self._rb_vertex_offsets[i]
+            count = local_verts.shape[0]
+            world_vertices[offset : offset + count] = (rot[i] @ local_verts.T).T + pos[
+                i
+            ].reshape(1, 3)
+        self.mesh_vertices.from_numpy(world_vertices)
 
     def _init_bbox(self):
         sx, sy, sz = self.grid_size
@@ -160,7 +360,6 @@ class Scene:
         layer_y_shift = row_pitch / 3.0
         eps = 1e-6
 
-        # Keep initialization away from the 1-cell solid boundary shell.
         domain_low = np.array(
             [self.grid_dx + r, self.grid_dy + r, self.grid_dz + r], dtype=np.float32
         )
@@ -174,7 +373,6 @@ class Scene:
         )
         spawn_low = np.maximum(range_low, domain_low)
         spawn_high = np.minimum(range_high, domain_high)
-
         if np.any(spawn_low > spawn_high):
             return np.zeros((0, 3), dtype=np.float32)
 
@@ -201,42 +399,152 @@ class Scene:
 
         return np.array(positions, dtype=np.float32)
 
-    @ti.kernel
-    def _initialize_particles(self):
-        for p in range(self.num_particles):
-            self.particle_pos[p] = self.particle_init_pos[p]
-            self.particle_vel[p] = ti.Vector([0.0, 0.0, 0.0])
+    @ti.func
+    def _cell_center(self, i: ti.i32, j: ti.i32, k: ti.i32):  # type: ignore
+        return ti.Vector(
+            [
+                (ti.cast(i, ti.f32) + 0.5) * self.grid_dx,
+                (ti.cast(j, ti.f32) + 0.5) * self.grid_dy,
+                (ti.cast(k, ti.f32) + 0.5) * self.grid_dz,
+            ]
+        )
+
+    @ti.func
+    def _rigid_body_velocity(self, point_world, body_id):
+        rel = point_world - self.rigid_pos[body_id]
+        return self.rigid_vel[body_id] + self.rigid_ang_vel[body_id].cross(rel)
+
+    @ti.func
+    def _cell_intersects_rigidbody(self, point_world, body_id, inflate: ti.f32):  # type: ignore
+        intersects = False
+        shape_type = self.rigid_shape_type[body_id]
+        rel = point_world - self.rigid_pos[body_id]
+        local = self.rigid_rot[body_id].transpose() @ rel
+
+        if shape_type == self.SHAPE_SPHERE:
+            r = self.rigid_radius[body_id]
+            intersects = local.norm() <= r + inflate
+        elif shape_type == self.SHAPE_CUBOID:
+            he = self.rigid_half_extent[body_id]
+            q = ti.Vector(
+                [
+                    ti.abs(local[0]) - he[0],
+                    ti.abs(local[1]) - he[1],
+                    ti.abs(local[2]) - he[2],
+                ]
+            )
+            outside = ti.Vector(
+                [ti.max(q[0], 0.0), ti.max(q[1], 0.0), ti.max(q[2], 0.0)]
+            )
+            outside_dist = outside.norm()
+            inside_dist = ti.min(ti.max(q[0], ti.max(q[1], q[2])), 0.0)
+            intersects = outside_dist + inside_dist <= inflate
+        elif shape_type == self.SHAPE_CYLINDER:
+            r = self.rigid_radius[body_id]
+            h = self.rigid_height[body_id]
+            radial = ti.sqrt(local[0] * local[0] + local[1] * local[1])
+            d = ti.Vector([radial - r, ti.abs(local[2]) - 0.5 * h])
+            outside = ti.Vector([ti.max(d[0], 0.0), ti.max(d[1], 0.0)])
+            outside_dist = outside.norm()
+            inside_dist = ti.min(ti.max(d[0], d[1]), 0.0)
+            intersects = outside_dist + inside_dist <= inflate
+        return intersects
 
     @ti.kernel
     def update_cell_type(self):
+        nx, ny, nz = self.grid_resolution
         self.num_water_grid[None] = 0
+        inflate = 0.5 * ti.sqrt(
+            self.grid_dx * self.grid_dx
+            + self.grid_dy * self.grid_dy
+            + self.grid_dz * self.grid_dz
+        )
+
         for I in ti.grouped(self.grid_cell_type):
-            if self.grid_cell_type[I] == CellType.CELL_WATER.value:
+            i, j, k = I
+            self.grid_solid_velocity[I] = ti.Vector([0.0, 0.0, 0.0])
+            if i == 0 or i == nx - 1 or j == 0 or j == ny - 1 or k == 0 or k == nz - 1:
+                self.grid_cell_type[I] = CellType.CELL_SOLID.value
+            else:
                 self.grid_cell_type[I] = CellType.CELL_AIR.value
+                center = self._cell_center(i, j, k)
+                for b in range(self.rigid_count[None]):
+                    if self._cell_intersects_rigidbody(center, b, inflate):
+                        self.grid_cell_type[I] = CellType.CELL_SOLID.value
+                        self.grid_solid_velocity[I] = self._rigid_body_velocity(
+                            center, b
+                        )
+
         for p in range(self.num_particles):
             x = ti.cast(ti.floor(self.particle_pos[p][0] / self.grid_dx), ti.i32)
             y = ti.cast(ti.floor(self.particle_pos[p][1] / self.grid_dy), ti.i32)
             z = ti.cast(ti.floor(self.particle_pos[p][2] / self.grid_dz), ti.i32)
+            x = ti.max(0, ti.min(nx - 1, x))
+            y = ti.max(0, ti.min(ny - 1, y))
+            z = ti.max(0, ti.min(nz - 1, z))
             if self.grid_cell_type[x, y, z] == CellType.CELL_AIR.value:
                 self.grid_cell_type[x, y, z] = CellType.CELL_WATER.value
+
         for I in ti.grouped(self.grid_cell_type):
             if self.grid_cell_type[I] == CellType.CELL_WATER.value:
                 ti.atomic_add(self.num_water_grid[None], 1)
 
+    @ti.func
+    def _get_skew_symmetric(self, v: ti.template()):  # type: ignore
+        return ti.Matrix([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+
     @ti.kernel
-    def _initialize_rigidbodies(self):
-        for i in range(self.rigidbody_capacity):
-            self.rigid_pos[i] = ti.Vector([0.0, 0.0, 0.0])
-            self.rigid_vel[i] = ti.Vector([0.0, 0.0, 0.0])
-            self.rigid_orientation[i] = ti.Vector([1.0, 0.0, 0.0, 0.0])
-            self.rigid_angular_vel[i] = ti.Vector([0.0, 0.0, 0.0])
-            self.rigid_dynamic[i] = 0
-            self.rigid_shape_type[i] = 0
-            self.rigid_radius[i] = 0.0
-            self.rigid_half_extent[i] = ti.Vector([0.0, 0.0, 0.0])
+    def pre_solve_kinematics(
+        self, dt: ti.f32, forces: ti.types.ndarray(), torques: ti.types.ndarray()  # type: ignore
+    ):
+        for i in range(self.rigid_count[None]):
+            if self.rigid_inv_mass[i] > 0.0:
+                force = ti.Vector([forces[i, 0], forces[i, 1], forces[i, 2]])
+                self.rigid_vel[i] += dt * force * self.rigid_inv_mass[i]
+
+                torque = ti.Vector([torques[i, 0], torques[i, 1], torques[i, 2]])
+                rot = self.rigid_rot[i]
+                i_inv_world = rot @ self.rigid_inv_inertia_body[i] @ rot.transpose()
+                i_world = rot @ self.rigid_inertia_body[i] @ rot.transpose()
+                omega = self.rigid_ang_vel[i]
+                torque_total = torque - omega.cross(i_world @ omega)
+                self.rigid_ang_vel[i] += dt * (i_inv_world @ torque_total)
+
+    @ti.kernel
+    def post_solve_kinematics(self, dt: ti.f32):  # type: ignore
+        for i in range(self.rigid_count[None]):
+            if self.rigid_inv_mass[i] > 0.0:
+                self.rigid_pos[i] += dt * self.rigid_vel[i]
+
+                omega = self.rigid_ang_vel[i]
+                dtheta = omega * dt
+                theta = dtheta.norm()
+                delta = ti.Matrix.identity(ti.f32, 3)
+                if theta < 1e-7:
+                    delta += self._get_skew_symmetric(dtheta)
+                else:
+                    axis = dtheta / theta
+                    k = self._get_skew_symmetric(axis)
+                    delta += ti.sin(theta) * k + (1.0 - ti.cos(theta)) * (k @ k)
+                self.rigid_rot[i] = delta @ self.rigid_rot[i]
+
+    def get_rigidbody_state(self):
+        n = self.num_rigidbodies
+        pos = self.rigid_pos.to_numpy()[:n]
+        vel = self.rigid_vel.to_numpy()[:n]
+        rot = self.rigid_rot.to_numpy()[:n]
+        ang_vel = self.rigid_ang_vel.to_numpy()[:n]
+        return pos, vel, rot, ang_vel
 
     def reset(self):
         self._initialize_grid()
         self._initialize_particles()
+        if self.num_rigidbodies > 0:
+            self.rigid_pos.copy_from(self.rigid_init_pos)
+            self.rigid_vel.copy_from(self.rigid_init_vel)
+            self.rigid_rot.copy_from(self.rigid_init_rot)
+            self.rigid_ang_vel.copy_from(self.rigid_init_ang_vel)
+            self.update_rigidbody_mesh_vertices()
+        self.avg_density[None] = 0.0
+        self.density_sum[None] = 0.0
         self.update_cell_type()
-        self._initialize_rigidbodies()
