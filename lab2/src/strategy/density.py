@@ -56,6 +56,7 @@ class DensityStrategy(DensityStrategyBase):
 
     @ti.kernel
     def _init_density(self):
+        self.scene.density_sum[None] = 0
         for I in ti.grouped(self.scene.grid_density):
             if self.scene.grid_cell_type[I] == CellType.CELL_WATER.value:
                 ti.atomic_add(self.scene.density_sum[None], self.scene.grid_density[I])

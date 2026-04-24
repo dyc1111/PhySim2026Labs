@@ -20,6 +20,8 @@ class Simulator(ABC):
     def __init__(self, sim_cfg, scene: Scene):
         self.scene = scene
         self.dt = float(sim_cfg["dt"])
+        self.dt_min = 1e-4
+        self.dt_max = 5e-2
         self.substeps = int(sim_cfg["substeps"])
         self.steps = int(sim_cfg["steps"])
 
@@ -50,11 +52,19 @@ class Simulator(ABC):
         self.camera.lookat(center[0], center[1], center[2])
         self.camera.up(0.0, 1.0, 0.0)
 
+    def _draw_gui(self):
+        gui = self.window.get_gui()
+        with gui.sub_window("timestep", 0.02, 0.02, 0.28, 0.20):
+            self.dt = gui.slider_float("dt", self.dt, self.dt_min, self.dt_max)
+            gui.text(f"dt = {self.dt:.6f}")
+
     def _handle_inputs(self):
         if not self.window.running or self.window.is_pressed(ti.ui.ESCAPE):
             if self.video:
                 self.video_manager.make_video(gif=False, mp4=True)
             return False
+
+        self._draw_gui()
 
         space_down = self.window.is_pressed(ti.ui.SPACE)
         if space_down and not self._space_was_down:
@@ -75,7 +85,7 @@ class Simulator(ABC):
 
         if not self.window.is_pressed(ti.ui.CTRL):
             self.camera.track_user_inputs(
-                self.window, movement_speed=0.03, hold_key=ti.ui.LMB
+                self.window, movement_speed=0.03, hold_key=ti.ui.RMB
             )
 
         self.scene_3d.set_camera(self.camera)
@@ -106,11 +116,12 @@ class Simulator(ABC):
 
     def run(self):
         n_steps = self.steps if self.steps >= 0 else float("inf")
-        sdt = self.dt / float(self.substeps)
         step = 0
         while step < n_steps:
             if not self._handle_inputs():
                 break
+
+            sdt = self.dt / float(self.substeps)
 
             if not self.paused:
                 for _ in range(self.substeps):
