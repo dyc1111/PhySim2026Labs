@@ -1,15 +1,18 @@
 gravity: [0.0, -9.8, 0.0]
 particles:
-  low: [3.0, 0.0, 0.0]
-  high: [5.0, 5.0, 5.0]
+  low: [1.0, 1.0, 1.0]
+  high: [4.0, 4.0, 4.0]
 grid:
   size: [5.0, 5.0, 5.0]
   resolution: [32, 32, 32]
 object:
-  - type: sphere
+  - type: custom
     dyn_type: free
-    size: 0.4
+    file_path: assets/flashlight.stl
+    size: 10.0
+    convexify: false
+    sdf_resolution: 16
     position: [2.5, 4.0, 2.5]
     rotation_deg: [0.0, 0.0, 0.0]
-    mass: 1.0
+    mass: 1.2
     color: [0.8, 0.2, 0.2]
