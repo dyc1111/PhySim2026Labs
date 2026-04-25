@@ -152,9 +152,7 @@ class Simulator(ABC):
         if self.video:
             self.video_manager.make_video(gif=False, mp4=True)
 
-    def _step(
-        self, sdt: float, applied_forces: np.ndarray, applied_torques: np.ndarray
-    ):
+    def _step(self, sdt, applied_forces, applied_torques):
         if self.scene.num_rigidbodies > 0:
             self.scene.pre_solve_kinematics(sdt, applied_forces, applied_torques)
             self.scene.post_solve_kinematics(sdt)
@@ -162,10 +160,10 @@ class Simulator(ABC):
         self.handle_collision()
         self.handle_separation()
         self.handle_collision()
-        self.handle_transfer(True)
+        self.handle_transfer(sdt, True)
         self.handle_density()
         self.handle_divergence(sdt)
-        self.handle_transfer(False)
+        self.handle_transfer(sdt, False)
 
     @abstractmethod
     def _build_strategies(self) -> FluidStrategies:
@@ -180,8 +178,8 @@ class Simulator(ABC):
     def handle_separation(self):
         self.strategies.separation.handle_separation()
 
-    def handle_transfer(self, is_p2g):
-        self.strategies.transfer.handle_transfer(is_p2g)
+    def handle_transfer(self, sdt, is_p2g):
+        self.strategies.transfer.handle_transfer(sdt, is_p2g)
 
     def handle_density(self):
         self.strategies.density.handle_density()
@@ -230,11 +228,32 @@ class APICSimulator(Simulator):
 
 
 class EulerianFluidSimulator(Simulator):
-    """Reserved scaffold for grid-only (semi-Lagrangian) fluid simulation."""
+    """Grid-based semi-Lagrangian simulator (Eulerian fluid)."""
 
-    def _advance_substep(self, sdt: float) -> None:
-        raise NotImplementedError(
-            "Eulerian fluid simulation scaffold is declared but not implemented"
+    def __init__(self, sim_cfg, scene: Scene):
+        self.extrapolation_iters = int(sim_cfg.get("extrapolation_iters", 10))
+        self.num_pressure_iters = int(
+            sim_cfg.get("pressure_max_iters", sim_cfg.get("num_pressure_iters", 200))
+        )
+        self.pressure_tolerance = float(sim_cfg.get("pressure_tolerance", 1e-6))
+        self.rho = float(sim_cfg.get("rho", 1.0))
+        self.use_pyamgx = bool(sim_cfg.get("use_pyamgx", True))
+        super().__init__(sim_cfg, scene)
+
+    def _build_strategies(self) -> FluidStrategies:
+        return FluidStrategies(
+            advection=SemiLagrangian(self.scene, self.extrapolation_iters),
+            collision=CollisionStrategy(self.scene),
+            separation=NoOpSeparationStrategy(),
+            transfer=EulerianTransferStrategy(self.scene),
+            density=NoOpDensityStrategy(),
+            divergence=EulerianPressureProjection(
+                self.scene,
+                max_iters=self.num_pressure_iters,
+                tolerance=self.pressure_tolerance,
+                rho=self.rho,
+                use_pyamgx=self.use_pyamgx,
+            ),
         )
 
 

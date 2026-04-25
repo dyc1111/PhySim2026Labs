@@ -1,0 +1,5 @@
+type: eulerian
+dt: 0.0166666667
+substeps: 2
+steps: -1
+use_pyamgx: True

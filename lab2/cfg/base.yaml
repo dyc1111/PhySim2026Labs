@@ -2,5 +2,5 @@ video: false
 
 defaults:
   - _self_
-  - scene: scene_1
+  - scene: norigid
   - sim: flip_pic

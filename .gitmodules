@@ -1,0 +1,6 @@
+[submodule "third_party/pyamgx"]
+	path = third_party/pyamgx
+	url = git@github.com:shwina/pyamgx.git
+[submodule "third_party/AMGX"]
+	path = third_party/AMGX
+	url = git@github.com:nvidia/amgx.git
