@@ -1,20 +1,9 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import taichi as ti
-import numpy as np
 from interaction import InteractionHandler
 from scene import Scene
 from strategy import *
-
-
-@dataclass
-class FluidStrategies:
-    advection: AdvectionStrategyBase
-    collision: CollisionStrategyBase
-    separation: SeparationStrategyBase
-    transfer: TransferStrategyBase
-    density: DensityStrategyBase
-    divergence: DivergenceStrategyBase
 
 
 class Simulator(ABC):
@@ -28,6 +17,7 @@ class Simulator(ABC):
         self.dt_max = 5e-2
         self.substeps = int(sim_cfg["substeps"])
         self.steps = int(sim_cfg["steps"])
+        self.advection_reflection = sim_cfg.get("advection_reflection", False)
 
         self.video = sim_cfg["video"]
         self.video_manager = ti.tools.VideoManager(
@@ -136,6 +126,8 @@ class Simulator(ABC):
                     break
 
                 sdt = self.dt / float(self.substeps)
+                if self.advection_reflection:
+                    sdt /= 2
                 applied_forces, applied_torques = (
                     self.interaction_handler.process_inputs(self.window, self.camera)
                 )
@@ -153,9 +145,10 @@ class Simulator(ABC):
             self.close()
 
     def _step(self, sdt, applied_forces, applied_torques):
+        real_dt = 2 * sdt if self.advection_reflection else sdt
         if self.scene.num_rigidbodies > 0:
-            self.scene.pre_solve_kinematics(sdt, applied_forces, applied_torques)
-            self.scene.post_solve_kinematics(sdt)
+            self.scene.pre_solve_kinematics(real_dt, applied_forces, applied_torques)
+            self.scene.post_solve_kinematics(real_dt)
         self.handle_advection(sdt)
         self.handle_collision()
         self.handle_separation()
@@ -163,7 +156,16 @@ class Simulator(ABC):
         self.handle_transfer(sdt, True)
         self.handle_density()
         self.handle_divergence(sdt)
-        self.handle_transfer(sdt, False)
+        if self.advection_reflection:
+            self.scene.reflect()
+            self.handle_advection(sdt)
+            self.handle_collision()
+            self.handle_separation()
+            self.handle_collision()
+            self.handle_transfer(sdt, True)
+            self.handle_density()
+            self.handle_divergence(sdt)
+        self.handle_transfer(real_dt, False)
 
     @abstractmethod
     def _build_strategies(self) -> FluidStrategies:
@@ -243,7 +245,7 @@ class EulerianFluidSimulator(Simulator):
     def _build_strategies(self) -> FluidStrategies:
         return FluidStrategies(
             advection=SemiLagrangian(self.scene, self.extrapolation_iters),
-            collision=CollisionStrategy(self.scene),
+            collision=NoOpCollisionStrategy(self.scene),
             separation=NoOpSeparationStrategy(),
             transfer=EulerianTransferStrategy(self.scene),
             density=DensityStrategy(self.scene),

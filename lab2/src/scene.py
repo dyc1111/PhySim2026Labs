@@ -484,3 +484,12 @@ class Scene:
         self.avg_density[None] = 0.0
         self.density_sum[None] = 0.0
         self.update_cell_type()
+
+    @ti.kernel
+    def reflect(self):
+        for I in ti.grouped(self.grid_u):
+            self.grid_u[I] = 2 * self.grid_u[I] - self.grid_u_prev[I]
+        for I in ti.grouped(self.grid_v):
+            self.grid_v[I] = 2 * self.grid_v[I] - self.grid_v_prev[I]
+        for I in ti.grouped(self.grid_w):
+            self.grid_w[I] = 2 * self.grid_w[I] - self.grid_w_prev[I]

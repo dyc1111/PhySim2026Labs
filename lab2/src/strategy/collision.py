@@ -62,5 +62,8 @@ class CollisionStrategy(CollisionStrategyBase):
 
 
 class NoOpCollisionStrategy(CollisionStrategyBase):
+    def __init__(self, scene: Scene):
+        self.scene = scene
+
     def handle_collision(self):
-        return
+        self.scene.update_cell_type()
