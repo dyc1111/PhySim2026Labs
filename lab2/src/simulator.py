@@ -64,8 +64,6 @@ class Simulator(ABC):
 
     def _handle_inputs(self):
         if not self.window.running or self.window.is_pressed(ti.ui.ESCAPE):
-            if self.video:
-                self.video_manager.make_video(gif=False, mp4=True)
             return False
 
         self._draw_gui()
@@ -132,25 +130,27 @@ class Simulator(ABC):
     def run(self):
         n_steps = self.steps if self.steps >= 0 else float("inf")
         step = 0
-        while step < n_steps:
-            if not self._handle_inputs():
-                break
+        try:
+            while step < n_steps:
+                if not self._handle_inputs():
+                    break
 
-            sdt = self.dt / float(self.substeps)
-            applied_forces, applied_torques = self.interaction_handler.process_inputs(
-                self.window, self.camera
-            )
+                sdt = self.dt / float(self.substeps)
+                applied_forces, applied_torques = (
+                    self.interaction_handler.process_inputs(self.window, self.camera)
+                )
 
-            if not self.paused:
-                for _ in range(self.substeps):
-                    self._step(sdt, applied_forces, applied_torques)
-                step += 1
+                if not self.paused:
+                    for _ in range(self.substeps):
+                        self._step(sdt, applied_forces, applied_torques)
+                    step += 1
 
-            if not self._render():
-                break
-
-        if self.video:
-            self.video_manager.make_video(gif=False, mp4=True)
+                if not self._render():
+                    break
+        finally:
+            if self.video:
+                self.video_manager.make_video(gif=False, mp4=True)
+            self.close()
 
     def _step(self, sdt, applied_forces, applied_torques):
         if self.scene.num_rigidbodies > 0:
@@ -187,6 +187,9 @@ class Simulator(ABC):
     def handle_divergence(self, dt):
         self.strategies.divergence.handle_divergence(dt)
 
+    def close(self):
+        self.strategies.divergence.destroy()
+
 
 class FlipPicSimulator(Simulator):
     def __init__(self, sim_cfg, scene: Scene):
@@ -204,7 +207,7 @@ class FlipPicSimulator(Simulator):
         else:
             separate = NoOpSeparationStrategy()
         return FluidStrategies(
-            advection=EulerIntegration(self.scene),
+            advection=GravityIntegration(self.scene),
             collision=CollisionStrategy(self.scene),
             separation=separate,
             transfer=FlipTransferStrategy(self.scene, self.flip_ratio),
@@ -231,13 +234,10 @@ class EulerianFluidSimulator(Simulator):
     """Grid-based semi-Lagrangian simulator (Eulerian fluid)."""
 
     def __init__(self, sim_cfg, scene: Scene):
-        self.extrapolation_iters = int(sim_cfg.get("extrapolation_iters", 10))
-        self.num_pressure_iters = int(
-            sim_cfg.get("pressure_max_iters", sim_cfg.get("num_pressure_iters", 200))
-        )
-        self.pressure_tolerance = float(sim_cfg.get("pressure_tolerance", 1e-6))
-        self.rho = float(sim_cfg.get("rho", 1.0))
-        self.use_pyamgx = bool(sim_cfg.get("use_pyamgx", True))
+        self.extrapolation_iters = sim_cfg["extrapolation_iters"]
+        self.num_pressure_iters = sim_cfg["pressure_max_iters"]
+        self.pressure_tolerance = sim_cfg["pressure_tolerance"]
+        self.rho = sim_cfg["rho"]
         super().__init__(sim_cfg, scene)
 
     def _build_strategies(self) -> FluidStrategies:
@@ -246,19 +246,15 @@ class EulerianFluidSimulator(Simulator):
             collision=CollisionStrategy(self.scene),
             separation=NoOpSeparationStrategy(),
             transfer=EulerianTransferStrategy(self.scene),
-            density=NoOpDensityStrategy(),
-            divergence=EulerianPressureProjection(
-                self.scene,
-                max_iters=self.num_pressure_iters,
-                tolerance=self.pressure_tolerance,
-                rho=self.rho,
-                use_pyamgx=self.use_pyamgx,
+            density=DensityStrategy(self.scene),
+            divergence=LinearSystem(
+                self.scene, self.num_pressure_iters, self.pressure_tolerance, self.rho
             ),
         )
 
 
 def build_simulator(sim_cfg, scene: Scene):
-    sim_type = str(sim_cfg.get("type", "flip_pic")).lower()
+    sim_type = sim_cfg["type"]
     if sim_type == "flip_pic":
         return FlipPicSimulator(sim_cfg, scene)
     if sim_type == "apic":

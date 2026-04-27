@@ -13,7 +13,7 @@ class AdvectionStrategyBase(ABC):
 
 
 @ti.data_oriented
-class EulerIntegration(AdvectionStrategyBase):
+class GravityIntegration(AdvectionStrategyBase):
     def __init__(self, scene: Scene):
         self.scene = scene
 
@@ -60,30 +60,14 @@ class SemiLagrangian(AdvectionStrategyBase):
         self.w_adv = ti.field(dtype=ti.f32, shape=scene.grid_w.shape)
 
     @ti.func
-    def _cell_type(
-        self, i: ti.i32, j: ti.i32, k: ti.i32, nx: ti.i32, ny: ti.i32, nz: ti.i32  # type: ignore
-    ):
+    def _cell_type(self, i, j, k, nx, ny, nz):
         t = CellType.CELL_SOLID.value
         if 0 <= i < nx and 0 <= j < ny and 0 <= k < nz:
             t = self.scene.grid_cell_type[i, j, k]
         return t
 
     @ti.func
-    def _clamp01(self, x):
-        return ti.max(0.0, ti.min(1.0, x))
-
-    @ti.func
-    def _trilerp(
-        self,
-        field: ti.template(),  # type: ignore
-        gx: ti.f32,  # type: ignore
-        gy: ti.f32,  # type: ignore
-        gz: ti.f32,  # type: ignore
-        sx: ti.i32,  # type: ignore
-        sy: ti.i32,  # type: ignore
-        sz: ti.i32,  # type: ignore
-    ):
-
+    def _trilerp(self, field, gx, gy, gz, sx, sy, sz):
         i0 = ti.cast(ti.floor(gx), ti.i32)
         j0 = ti.cast(ti.floor(gy), ti.i32)
         k0 = ti.cast(ti.floor(gz), ti.i32)
@@ -109,7 +93,7 @@ class SemiLagrangian(AdvectionStrategyBase):
         return num / denom
 
     @ti.func
-    def _sample_u(self, field: ti.template(), pos):  # type: ignore
+    def _interpolate_u(self, field, pos):
         nx, ny, nz = self.scene.grid_resolution
         gx = pos[0] / self.scene.grid_dx
         gy = pos[1] / self.scene.grid_dy - 0.5
@@ -117,7 +101,7 @@ class SemiLagrangian(AdvectionStrategyBase):
         return self._trilerp(field, gx, gy, gz, nx + 1, ny, nz)
 
     @ti.func
-    def _sample_v(self, field: ti.template(), pos):  # type: ignore
+    def _interpolate_v(self, field, pos):
         nx, ny, nz = self.scene.grid_resolution
         gx = pos[0] / self.scene.grid_dx - 0.5
         gy = pos[1] / self.scene.grid_dy
@@ -125,7 +109,7 @@ class SemiLagrangian(AdvectionStrategyBase):
         return self._trilerp(field, gx, gy, gz, nx, ny + 1, nz)
 
     @ti.func
-    def _sample_w(self, field: ti.template(), pos):  # type: ignore
+    def _interpolate_w(self, field, pos):
         nx, ny, nz = self.scene.grid_resolution
         gx = pos[0] / self.scene.grid_dx - 0.5
         gy = pos[1] / self.scene.grid_dy - 0.5
@@ -133,17 +117,17 @@ class SemiLagrangian(AdvectionStrategyBase):
         return self._trilerp(field, gx, gy, gz, nx, ny, nz + 1)
 
     @ti.func
-    def _sample_velocity(self, pos):
+    def _interpolate_vel(self, pos):
         return ti.Vector(
             [
-                self._sample_u(self.u_ext, pos),
-                self._sample_v(self.v_ext, pos),
-                self._sample_w(self.w_ext, pos),
+                self._interpolate_u(self.u_ext, pos),
+                self._interpolate_v(self.v_ext, pos),
+                self._interpolate_w(self.w_ext, pos),
             ]
         )
 
     @ti.kernel
-    def _capture_source(self):
+    def _read(self):
         for I in ti.grouped(self.scene.grid_u):
             self.u_src[I] = self.scene.grid_u[I]
         for I in ti.grouped(self.scene.grid_v):
@@ -252,7 +236,7 @@ class SemiLagrangian(AdvectionStrategyBase):
                 self.w_ext[I] = self.w_src[I]
 
     @ti.kernel
-    def _extrapolate_u_step(
+    def _extrapolate_u(
         self,
         src: ti.template(),  # type: ignore
         src_mask: ti.template(),  # type: ignore
@@ -297,7 +281,7 @@ class SemiLagrangian(AdvectionStrategyBase):
                     dst_mask[I] = 0
 
     @ti.kernel
-    def _extrapolate_v_step(
+    def _extrapolate_v(
         self,
         src: ti.template(),  # type: ignore
         src_mask: ti.template(),  # type: ignore
@@ -342,7 +326,7 @@ class SemiLagrangian(AdvectionStrategyBase):
                     dst_mask[I] = 0
 
     @ti.kernel
-    def _extrapolate_w_step(
+    def _extrapolate_w(
         self,
         src: ti.template(),  # type: ignore
         src_mask: ti.template(),  # type: ignore
@@ -400,12 +384,12 @@ class SemiLagrangian(AdvectionStrategyBase):
                         (ti.cast(k, ti.f32) + 0.5) * self.scene.grid_dz,
                     ]
                 )
-                v0 = self._sample_velocity(x0)
+                v0 = self._interpolate_vel(x0)
                 xmid = x0 - 0.5 * dt * v0
-                vmid = self._sample_velocity(xmid)
+                vmid = self._interpolate_vel(xmid)
                 xback = x0 - dt * vmid
                 self.u_adv[I] = (
-                    self._sample_u(self.u_ext, xback) + self.scene.gravity[0] * dt
+                    self._interpolate_u(self.u_ext, xback) + self.scene.gravity[0] * dt
                 )
 
     @ti.kernel
@@ -422,12 +406,12 @@ class SemiLagrangian(AdvectionStrategyBase):
                         (ti.cast(k, ti.f32) + 0.5) * self.scene.grid_dz,
                     ]
                 )
-                v0 = self._sample_velocity(x0)
+                v0 = self._interpolate_vel(x0)
                 xmid = x0 - 0.5 * dt * v0
-                vmid = self._sample_velocity(xmid)
+                vmid = self._interpolate_vel(xmid)
                 xback = x0 - dt * vmid
                 self.v_adv[I] = (
-                    self._sample_v(self.v_ext, xback) + self.scene.gravity[1] * dt
+                    self._interpolate_v(self.v_ext, xback) + self.scene.gravity[1] * dt
                 )
 
     @ti.kernel
@@ -444,51 +428,48 @@ class SemiLagrangian(AdvectionStrategyBase):
                         ti.cast(k, ti.f32) * self.scene.grid_dz,
                     ]
                 )
-                v0 = self._sample_velocity(x0)
+                v0 = self._interpolate_vel(x0)
                 xmid = x0 - 0.5 * dt * v0
-                vmid = self._sample_velocity(xmid)
+                vmid = self._interpolate_vel(xmid)
                 xback = x0 - dt * vmid
                 self.w_adv[I] = (
-                    self._sample_w(self.w_ext, xback) + self.scene.gravity[2] * dt
+                    self._interpolate_w(self.w_ext, xback) + self.scene.gravity[2] * dt
                 )
 
     @ti.kernel
-    def _write_back(self):
+    def _write(self):
         for I in ti.grouped(self.scene.grid_u):
-            self.scene.grid_u_prev[I] = self.scene.grid_u[I]
             self.scene.grid_u[I] = self.u_adv[I]
         for I in ti.grouped(self.scene.grid_v):
-            self.scene.grid_v_prev[I] = self.scene.grid_v[I]
             self.scene.grid_v[I] = self.v_adv[I]
         for I in ti.grouped(self.scene.grid_w):
-            self.scene.grid_w_prev[I] = self.scene.grid_w[I]
             self.scene.grid_w[I] = self.w_adv[I]
 
     def _extrapolate_faces(self):
         for _ in range(self.extrapolation_iters):
-            self._extrapolate_u_step(
+            self._extrapolate_u(
                 self.u_ext, self.u_mask, self.u_ext_next, self.u_mask_next
             )
             self.u_ext.copy_from(self.u_ext_next)
             self.u_mask.copy_from(self.u_mask_next)
 
-            self._extrapolate_v_step(
+            self._extrapolate_v(
                 self.v_ext, self.v_mask, self.v_ext_next, self.v_mask_next
             )
             self.v_ext.copy_from(self.v_ext_next)
             self.v_mask.copy_from(self.v_mask_next)
 
-            self._extrapolate_w_step(
+            self._extrapolate_w(
                 self.w_ext, self.w_mask, self.w_ext_next, self.w_mask_next
             )
             self.w_ext.copy_from(self.w_ext_next)
             self.w_mask.copy_from(self.w_mask_next)
 
     def handle_advection(self, dt: float):
-        self._capture_source()
+        self._read()
         self._build_face_meta()
         self._extrapolate_faces()
         self._advect_u(dt)
         self._advect_v(dt)
         self._advect_w(dt)
-        self._write_back()
+        self._write()

@@ -2,4 +2,7 @@ type: eulerian
 dt: 0.0166666667
 substeps: 2
 steps: -1
-use_pyamgx: True
+extrapolation_iters: 5
+pressure_max_iters: 20
+pressure_tolerance: 0.01
+rho: 1.0

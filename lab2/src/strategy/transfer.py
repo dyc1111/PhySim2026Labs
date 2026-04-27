@@ -270,7 +270,7 @@ class EulerianTransferStrategy(TransferStrategyBase):
         self.scene = scene
 
     @ti.kernel
-    def _g2p_and_advect(self, dt: ti.f32):  # type: ignore
+    def _g2p_transfer(self, dt: ti.f32):  # type: ignore
         dx, dy, dz = self.scene.grid_dx, self.scene.grid_dy, self.scene.grid_dz
         nx, ny, nz = self.scene.grid_resolution
         sx, sy, sz = self.scene.grid_size
@@ -369,4 +369,4 @@ class EulerianTransferStrategy(TransferStrategyBase):
     def handle_transfer(self, sdt, is_p2g):
         if is_p2g:
             return
-        self._g2p_and_advect(sdt)
+        self._g2p_transfer(sdt)

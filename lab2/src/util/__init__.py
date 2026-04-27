@@ -12,3 +12,4 @@ from .loadmesh import (
     load_custom_mesh,
     load_sdf_cache,
 )
+from .solver import AmgxSolver

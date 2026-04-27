@@ -1,12 +1,11 @@
 from abc import ABC, abstractmethod
-import atexit
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import taichi as ti
-
 from constants import CellType
 from scene import Scene
+from util import AmgxSolver
 
 
 class DivergenceStrategyBase(ABC):
@@ -14,6 +13,9 @@ class DivergenceStrategyBase(ABC):
     def handle_divergence(self, dt):
         """Project grid velocity to a divergence-free field."""
         return NotImplementedError
+
+    def destroy(self):
+        return
 
 
 @ti.data_oriented
@@ -105,85 +107,21 @@ class GaussSeidel(DivergenceStrategyBase):
             self._gauss_seidel_mod2(1)
 
 
-class _AmgxSolver:
-    _initialized = False
-
-    @classmethod
-    def _initialize_runtime(cls, pyamgx_mod):
-        if not cls._initialized:
-            pyamgx_mod.initialize()
-            atexit.register(pyamgx_mod.finalize)
-            cls._initialized = True
-
-    def __init__(self, max_iters: int, tolerance: float):
-        import pyamgx
-
-        self.pyamgx = pyamgx
-        _AmgxSolver._initialize_runtime(self.pyamgx)
-        cfg_dict = {
-            "config_version": 2,
-            "exception_handling": 1,
-            "solver": {
-                "scope": "main",
-                "solver": "PCG",
-                "preconditioner": {"scope": "amg", "solver": "NOSOLVER"},
-                "max_iters": int(max_iters),
-                "tolerance": float(tolerance),
-                "monitor_residual": 0,
-                "norm": "L2",
-            },
-        }
-        self.cfg = pyamgx.Config().create_from_dict(cfg_dict)
-        self.rsrc = pyamgx.Resources().create_simple(self.cfg)
-        self.A = pyamgx.Matrix().create(self.rsrc)
-        self.b = pyamgx.Vector().create(self.rsrc)
-        self.x = pyamgx.Vector().create(self.rsrc)
-        self.solver = pyamgx.Solver().create(self.rsrc, self.cfg)
-
-    def solve(self, A_csr: sp.csr_matrix, b_np: np.ndarray) -> np.ndarray:
-        A_csr = A_csr.astype(np.float64)
-        b_np = b_np.astype(np.float64)
-        self.A.upload_CSR(A_csr)
-        self.b.upload(b_np)
-        self.x.upload(np.zeros_like(b_np))
-        self.solver.setup(self.A)
-        self.solver.solve(self.b, self.x)
-        out = np.zeros_like(b_np)
-        self.x.download(out)
-        return out
-
-    def destroy(self):
-        self.solver.destroy()
-        self.x.destroy()
-        self.b.destroy()
-        self.A.destroy()
-        self.rsrc.destroy()
-        self.cfg.destroy()
-
-
-class EulerianPressureProjection(DivergenceStrategyBase):
-    def __init__(self, scene: Scene, max_iters, tolerance, rho=1.0, use_pyamgx=True):
+class LinearSystem(DivergenceStrategyBase):
+    def __init__(self, scene: Scene, max_iters, tolerance, rho):
         self.scene = scene
         self.max_iters = int(max_iters)
         self.tolerance = float(tolerance)
         self.rho = float(rho)
-        self._amgx = None
-        self._amgx_enabled = bool(use_pyamgx)
-        if self._amgx_enabled:
-            try:
-                self._amgx = _AmgxSolver(self.max_iters, self.tolerance)
-            except Exception:
-                self._amgx_enabled = False
+        self.amgx = AmgxSolver(self.max_iters, self.tolerance)
 
-    def _cell_type(self, cell_type: np.ndarray, i: int, j: int, k: int) -> int:
+    def _cell_type(self, cell_type, i, j, k) -> int:
         nx, ny, nz = cell_type.shape
         if 0 <= i < nx and 0 <= j < ny and 0 <= k < nz:
             return int(cell_type[i, j, k])
         return CellType.CELL_SOLID.value
 
-    def _u_face_solid_vel(
-        self, cell_type: np.ndarray, solid_vel: np.ndarray, i: int, j: int, k: int
-    ) -> float:
+    def _u_face_solid_vel(self, cell_type, solid_vel, i, j, k):
         nx = cell_type.shape[0]
         val = 0.0
         count = 0.0
@@ -195,9 +133,7 @@ class EulerianPressureProjection(DivergenceStrategyBase):
             count += 1.0
         return val / count if count > 0.0 else 0.0
 
-    def _v_face_solid_vel(
-        self, cell_type: np.ndarray, solid_vel: np.ndarray, i: int, j: int, k: int
-    ) -> float:
+    def _v_face_solid_vel(self, cell_type, solid_vel, i, j, k):
         ny = cell_type.shape[1]
         val = 0.0
         count = 0.0
@@ -209,9 +145,7 @@ class EulerianPressureProjection(DivergenceStrategyBase):
             count += 1.0
         return val / count if count > 0.0 else 0.0
 
-    def _w_face_solid_vel(
-        self, cell_type: np.ndarray, solid_vel: np.ndarray, i: int, j: int, k: int
-    ) -> float:
+    def _w_face_solid_vel(self, cell_type, solid_vel, i, j, k):
         nz = cell_type.shape[2]
         val = 0.0
         count = 0.0
@@ -223,18 +157,9 @@ class EulerianPressureProjection(DivergenceStrategyBase):
             count += 1.0
         return val / count if count > 0.0 else 0.0
 
-    def _build_linear_system(
-        self,
-        dt: float,
-        u: np.ndarray,
-        v: np.ndarray,
-        w: np.ndarray,
-        cell_type: np.ndarray,
-        solid_vel: np.ndarray,
-    ):
+    def _build_linear_system(self, dt, u, v, w, cell_type, solid_vel):
         nx, ny, nz = self.scene.grid_resolution
-        h = float(self.scene.grid_dx)
-        inv_h2 = 1.0 / (h * h)
+        h = self.scene.grid_dx
 
         fluid = cell_type == CellType.CELL_WATER.value
         index = -np.ones((nx, ny, nz), dtype=np.int32)
@@ -242,9 +167,7 @@ class EulerianPressureProjection(DivergenceStrategyBase):
         for row_id, (i, j, k) in enumerate(fluid_coords):
             index[i, j, k] = row_id
 
-        n = int(fluid_coords.shape[0])
-        if n == 0:
-            return None, None, index
+        n = fluid_coords.shape[0]
 
         rows = []
         cols = []
@@ -252,7 +175,7 @@ class EulerianPressureProjection(DivergenceStrategyBase):
         b = np.zeros((n,), dtype=np.float64)
 
         for i, j, k in fluid_coords:
-            row = int(index[i, j, k])
+            row = index[i, j, k]
             diag = 0.0
 
             t_xm = self._cell_type(cell_type, i - 1, j, k)
@@ -265,36 +188,36 @@ class EulerianPressureProjection(DivergenceStrategyBase):
             u_left = (
                 self._u_face_solid_vel(cell_type, solid_vel, i, j, k)
                 if t_xm == CellType.CELL_SOLID.value
-                else float(u[i, j, k])
+                else u[i, j, k]
             )
             u_right = (
                 self._u_face_solid_vel(cell_type, solid_vel, i + 1, j, k)
                 if t_xp == CellType.CELL_SOLID.value
-                else float(u[i + 1, j, k])
+                else u[i + 1, j, k]
             )
             v_down = (
                 self._v_face_solid_vel(cell_type, solid_vel, i, j, k)
                 if t_ym == CellType.CELL_SOLID.value
-                else float(v[i, j, k])
+                else v[i, j, k]
             )
             v_up = (
                 self._v_face_solid_vel(cell_type, solid_vel, i, j + 1, k)
                 if t_yp == CellType.CELL_SOLID.value
-                else float(v[i, j + 1, k])
+                else v[i, j + 1, k]
             )
             w_back = (
                 self._w_face_solid_vel(cell_type, solid_vel, i, j, k)
                 if t_zm == CellType.CELL_SOLID.value
-                else float(w[i, j, k])
+                else w[i, j, k]
             )
             w_front = (
                 self._w_face_solid_vel(cell_type, solid_vel, i, j, k + 1)
                 if t_zp == CellType.CELL_SOLID.value
-                else float(w[i, j, k + 1])
+                else w[i, j, k + 1]
             )
 
-            div = (u_right - u_left + v_up - v_down + w_front - w_back) / h
-            b[row] = (self.rho / dt) * div
+            div = -u_right + u_left - v_up + v_down - w_front + w_back
+            b[row] = self.rho * h * div / dt
 
             for ni, nj, nk, nt in (
                 (i - 1, j, k, t_xm),
@@ -305,14 +228,14 @@ class EulerianPressureProjection(DivergenceStrategyBase):
                 (i, j, k + 1, t_zp),
             ):
                 if nt == CellType.CELL_WATER.value:
-                    diag += inv_h2
+                    diag += 1.0
                     rows.append(row)
-                    cols.append(int(index[ni, nj, nk]))
-                    vals.append(-inv_h2)
+                    cols.append(index[ni, nj, nk])
+                    vals.append(-1.0)
                 elif nt == CellType.CELL_AIR.value:
-                    diag += inv_h2
+                    diag += 1.0
 
-            if diag <= 0.0:
+            if diag == 0.0:
                 diag = 1.0
                 b[row] = 0.0
             rows.append(row)
@@ -322,31 +245,9 @@ class EulerianPressureProjection(DivergenceStrategyBase):
         A = sp.csr_matrix((vals, (rows, cols)), shape=(n, n), dtype=np.float64)
         return A, b, index
 
-    def _solve_pressure(self, A: sp.csr_matrix, b: np.ndarray) -> np.ndarray:
-        if self._amgx_enabled and self._amgx is not None:
-            try:
-                return self._amgx.solve(A, b)
-            except Exception:
-                self._amgx_enabled = False
-                self._amgx = None
-
-        x, info = spla.cg(A, b, maxiter=self.max_iters, atol=0.0, rtol=self.tolerance)
-        if info != 0:
-            x = spla.spsolve(A, b)
-        return np.asarray(x, dtype=np.float64)
-
-    def _project_velocity(
-        self,
-        dt: float,
-        u: np.ndarray,
-        v: np.ndarray,
-        w: np.ndarray,
-        cell_type: np.ndarray,
-        solid_vel: np.ndarray,
-        pressure: np.ndarray,
-    ):
+    def _project_velocity(self, dt, u, v, w, cell_type, solid_vel, pressure):
         nx, ny, nz = self.scene.grid_resolution
-        h = float(self.scene.grid_dx)
+        h = self.scene.grid_dx
         scale = dt / self.rho
 
         u_new = u.copy()
@@ -439,9 +340,6 @@ class EulerianPressureProjection(DivergenceStrategyBase):
         self.scene.grid_w.from_numpy(w_new.astype(np.float32))
 
     def handle_divergence(self, dt):
-        if dt <= 0.0:
-            return
-
         u = self.scene.grid_u.to_numpy()
         v = self.scene.grid_v.to_numpy()
         w = self.scene.grid_w.to_numpy()
@@ -451,9 +349,12 @@ class EulerianPressureProjection(DivergenceStrategyBase):
         A, b, index = self._build_linear_system(dt, u, v, w, cell_type, solid_vel)
         nx, ny, nz = self.scene.grid_resolution
         pressure = np.zeros((nx, ny, nz), dtype=np.float64)
-        if A is not None:
-            x = self._solve_pressure(A, b)
-            fluid_mask = index >= 0
-            pressure[fluid_mask] = x[index[fluid_mask]]
+
+        x = self.amgx.solve(A, b)
+        fluid_mask = index >= 0
+        pressure[fluid_mask] = x[index[fluid_mask]]
 
         self._project_velocity(dt, u, v, w, cell_type, solid_vel, pressure)
+
+    def destroy(self):
+        self.amgx.destroy()
