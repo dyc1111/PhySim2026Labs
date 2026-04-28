@@ -1,0 +1,9 @@
+type: apic
+dt: 0.0166666667
+substeps: 2
+steps: -1
+separate_particles: true
+num_particle_iters: 2
+num_pressure_iters: 50
+over_relaxation: 1.9
+compensate_drift: true

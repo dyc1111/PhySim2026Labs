@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 import taichi as ti
 from interaction import InteractionHandler
 from scene import Scene
@@ -7,8 +6,6 @@ from strategy import *
 
 
 class Simulator(ABC):
-    """Base class for all simulators (FLIP/PIC/APIC/Eulerian/etc.)."""
-
     def __init__(self, sim_cfg, scene: Scene):
         self.scene = scene
         self.interaction_handler = InteractionHandler(scene)
@@ -193,7 +190,7 @@ class Simulator(ABC):
         self.strategies.divergence.destroy()
 
 
-class FlipPicSimulator(Simulator):
+class FpicSimulator(Simulator):
     def __init__(self, sim_cfg, scene: Scene):
         self.flip_ratio = float(sim_cfg["flip_ratio"])
         self.separate_particles = bool(sim_cfg["separate_particles"])
@@ -212,7 +209,7 @@ class FlipPicSimulator(Simulator):
             advection=GravityIntegration(self.scene),
             collision=CollisionStrategy(self.scene),
             separation=separate,
-            transfer=FlipTransferStrategy(self.scene, self.flip_ratio),
+            transfer=FpicTransferStragety(self.scene, self.flip_ratio),
             density=DensityStrategy(self.scene),
             divergence=GaussSeidel(
                 self.scene,
@@ -223,12 +220,32 @@ class FlipPicSimulator(Simulator):
         )
 
 
-class APICSimulator(Simulator):
-    """Reserved scaffold for APIC implementation."""
+class ApicSimulator(Simulator):
+    def __init__(self, sim_cfg, scene: Scene):
+        self.separate_particles = bool(sim_cfg["separate_particles"])
+        self.num_particle_iters = int(sim_cfg["num_particle_iters"])
+        self.num_pressure_iters = int(sim_cfg["num_pressure_iters"])
+        self.over_relaxation = float(sim_cfg["over_relaxation"])
+        self.compensate_drift = bool(sim_cfg["compensate_drift"])
+        super().__init__(sim_cfg, scene)
 
     def _build_strategies(self) -> FluidStrategies:
-        raise NotImplementedError(
-            "APIC simulation scaffold is declared but not implemented"
+        if self.separate_particles:
+            separate = SeparationStrategy(self.scene, self.num_particle_iters)
+        else:
+            separate = NoOpSeparationStrategy()
+        return FluidStrategies(
+            advection=GravityIntegration(self.scene),
+            collision=CollisionStrategy(self.scene),
+            separation=separate,
+            transfer=ApicTransferStrategy(self.scene),
+            density=DensityStrategy(self.scene),
+            divergence=GaussSeidel(
+                self.scene,
+                self.num_pressure_iters,
+                self.over_relaxation,
+                self.compensate_drift,
+            ),
         )
 
 
@@ -257,10 +274,10 @@ class EulerianFluidSimulator(Simulator):
 
 def build_simulator(sim_cfg, scene: Scene):
     sim_type = sim_cfg["type"]
-    if sim_type == "flip_pic":
-        return FlipPicSimulator(sim_cfg, scene)
+    if sim_type == "fpic":
+        return FpicSimulator(sim_cfg, scene)
     if sim_type == "apic":
-        return APICSimulator(sim_cfg, scene)
+        return ApicSimulator(sim_cfg, scene)
     if sim_type == "eulerian":
         return EulerianFluidSimulator(sim_cfg, scene)
     raise NotImplementedError(f"Unsupported simulator type: {sim_type}")

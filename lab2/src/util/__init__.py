@@ -6,6 +6,7 @@ from .util import (
     ray_aabb_intersect,
     ray_cylinder_intersect,
     ray_sphere_intersect,
+    bspline,
 )
 from .loadmesh import (
     DEFAULT_SDF_RESOLUTION,

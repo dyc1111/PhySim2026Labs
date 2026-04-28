@@ -142,3 +142,13 @@ def ray_cylinder_intersect(orig, direction, radius, height):
                     hit_normal = np.array([0.0, 0.0, nz], dtype=np.float32)
 
     return hit, t_min if hit else 0.0, hit_normal
+
+
+@ti.func
+def bspline(x):
+    result = 0.0
+    if -0.5 <= x <= 0.5:
+        result = 0.75 - x * x
+    elif -1.5 <= x <= 1.5:
+        result = 0.5 * (1.5 - abs(x)) * (1.5 - abs(x))
+    return result

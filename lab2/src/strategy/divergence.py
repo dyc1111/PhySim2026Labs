@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 import numpy as np
 import scipy.sparse as sp
-import scipy.sparse.linalg as spla
 import taichi as ti
 from constants import CellType
 from scene import Scene

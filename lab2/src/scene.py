@@ -1,7 +1,6 @@
 import math
 import numpy as np
 import taichi as ti
-
 from constants import CellType, bbox_indices, bbox_verts
 from rigidbody import create_rigid_body
 from util import HashTable, skew_symmetric
@@ -101,6 +100,9 @@ class Scene:
         self.particle_pos = ti.Vector.field(3, dtype=ti.f32, shape=self.num_particles)
         self.particle_vel = ti.Vector.field(3, dtype=ti.f32, shape=self.num_particles)
         self.particle_color = ti.Vector.field(3, dtype=ti.f32, shape=self.num_particles)
+        self.particle_mat = ti.Matrix.field(
+            3, 3, dtype=ti.f32, shape=self.num_particles
+        )
 
         self.hashtable = HashTable(
             self.grid_size, self.particle_radius, self.num_particles
@@ -193,6 +195,9 @@ class Scene:
             self.particle_pos[p] = self.particle_init_pos[p]
             self.particle_vel[p] = ti.Vector([0.0, 0.0, 0.0])
             self.particle_color[p] = ti.Vector([0.0, 0.0, 1.0])
+            self.particle_mat[p] = ti.Matrix(
+                [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+            )
 
     @ti.kernel
     def _initialize_rigidbodies(self):

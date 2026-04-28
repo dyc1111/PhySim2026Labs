@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 import taichi as ti
-
 from constants import CellType
 from scene import Scene
 
