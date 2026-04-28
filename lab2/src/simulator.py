@@ -138,7 +138,7 @@ class Simulator(ABC):
                     break
         finally:
             if self.video:
-                self.video_manager.make_video(gif=False, mp4=True)
+                self.video_manager.make_video(gif=True, mp4=False)
             self.close()
 
     def _step(self, sdt, applied_forces, applied_torques):

@@ -8,7 +8,7 @@ grid:
 object:
   - type: custom
     dyn_type: free
-    file_path: assets/flashlight.stl
+    file_path: assets/stick.stl
     size: 10.0
     convexify: false
     sdf_resolution: 16
