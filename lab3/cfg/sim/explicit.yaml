@@ -1,0 +1,6 @@
+type: explicit
+dt: 0.001
+substeps: 1
+steps: -1
+interaction_force: 200.0
+pick_radius: 0.15
