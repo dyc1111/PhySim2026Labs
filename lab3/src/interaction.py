@@ -5,10 +5,8 @@ from util import get_camera_ray_dir
 
 
 class InteractionHandler:
-    def __init__(self, scene: Scene, force_scale=200.0, pick_radius=0.12):
+    def __init__(self, scene: Scene):
         self.scene = scene
-        self.force_scale = float(force_scale)
-        self.pick_radius = float(pick_radius)
         self.selected_vertex = -1
         self.original_mouse_pos = None
 
@@ -28,7 +26,7 @@ class InteractionHandler:
         dist = np.linalg.norm(positions - closest, axis=1)
         dist[~in_front] = np.inf
         vid = int(np.argmin(dist))
-        if vid >= 0 and float(dist[vid]) <= self.pick_radius:
+        if vid >= 0 and float(dist[vid]) <= 0.1:
             return vid
         return -1
 
@@ -61,8 +59,6 @@ class InteractionHandler:
 
             dx = mouse_pos[0] - self.original_mouse_pos[0]
             dy = mouse_pos[1] - self.original_mouse_pos[1]
-            applied_forces[self.selected_vertex] = (
-                dx * right + dy * up
-            ) * self.force_scale
+            applied_forces[self.selected_vertex] = (dx * right + dy * up) * 200
 
         return applied_forces

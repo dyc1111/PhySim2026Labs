@@ -2,5 +2,5 @@ video: false
 
 defaults:
   - _self_
-  - scene: soft_cube
+  - scene: cuboid
   - sim: explicit

@@ -4,5 +4,7 @@ origin: [-4.0, 1.0, -1.0]
 size: [8.0, 2.0, 2.0]
 resolution: [12, 3, 3]
 density: 400.0
+young: 20000.0
+poisson: 0.2
 pin: left
 color: [0.2, 0.55, 0.9]

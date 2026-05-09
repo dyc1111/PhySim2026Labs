@@ -147,37 +147,37 @@ def build_cloth_mesh(cfg):
     def _grid_id(i, k):
         return i * (nz + 1) + k
 
-    elements = []
+    triangles = []
     for i in range(nx):
         for k in range(nz):
             v00 = _grid_id(i, k)
             v10 = _grid_id(i + 1, k)
             v01 = _grid_id(i, k + 1)
             v11 = _grid_id(i + 1, k + 1)
-            elements.append((v00, v11, v10))
-            elements.append((v00, v01, v11))
+            triangles.append((v00, v11, v10))
+            triangles.append((v00, v01, v11))
 
-    elements = np.asarray(elements, dtype=np.int32)
-    elements = np.full((len(elements), 4), -1, dtype=np.int32)
-    elements[:, :3] = elements
+    triangles = np.asarray(triangles, dtype=np.int32)
+    elements = np.full((len(triangles), 4), -1, dtype=np.int32)
+    elements[:, :3] = triangles
     rest_inv_3 = np.zeros((len(elements), 3, 3), dtype=np.float32)
     rest_inv_2 = np.zeros((len(elements), 2, 2), dtype=np.float32)
     rest_measure = np.zeros((len(elements),), dtype=np.float32)
     masses = np.zeros((len(vertices),), dtype=np.float32)
 
-    for i, element in enumerate(elements):
-        uv0, uv1, uv2 = rest_uv[element]
+    for i, triangle in enumerate(triangles):
+        uv0, uv1, uv2 = rest_uv[triangle]
         E = np.column_stack((uv1 - uv0, uv2 - uv0)).astype(np.float32)
         area = abs(float(np.linalg.det(E))) / 2.0
         rest_inv_2[i] = np.linalg.inv(E).astype(np.float32)
         rest_measure[i] = area
-        for vidx in element:
+        for vidx in triangle:
             masses[int(vidx)] += density * area / 3.0
 
     return MeshData(
         vertices=vertices,
         elements=elements,
-        surface_faces=elements,
+        surface_faces=triangles,
         rest_inv_3=rest_inv_3,
         rest_inv_2=rest_inv_2,
         rest_measure=rest_measure,

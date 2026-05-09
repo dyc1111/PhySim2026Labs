@@ -2,23 +2,26 @@ from abc import ABC, abstractmethod
 import taichi as ti
 from interaction import InteractionHandler
 from scene import Scene
+from energy import ENERGY_MODEL_REGISTER
 
 
 class Simulator(ABC):
     def __init__(self, sim_cfg, scene: Scene):
         self.scene = scene
-        self.dt = float(sim_cfg.get("dt", 0.001))
-        self.substeps = int(sim_cfg.get("substeps", 1))
-        self.steps = int(sim_cfg.get("steps", -1))
-        self.video = bool(sim_cfg.get("video", False))
+        self.dt = sim_cfg["dt"]
+        self.substeps = sim_cfg["substeps"]
+        self.steps = sim_cfg["steps"]
+
+        model = sim_cfg["model"]
+        if model not in ENERGY_MODEL_REGISTER.keys():
+            raise NotImplementedError(f"Unsupported energy model: {model}")
+        self.model = ENERGY_MODEL_REGISTER[model](scene)
+
+        self.video = sim_cfg["video"]
         self.paused = False
         self._space_was_down = False
         self._f_was_down = False
-        self.interaction_handler = InteractionHandler(
-            scene,
-            force_scale=float(sim_cfg.get("interaction_force", 200.0)),
-            pick_radius=float(sim_cfg.get("pick_radius", 0.12)),
-        )
+        self.interaction_handler = InteractionHandler(scene)
         self.video_manager = ti.tools.VideoManager(
             output_dir="./", framerate=30, automatic_build=False
         )
@@ -108,8 +111,12 @@ class Simulator(ABC):
 class ExplicitEulerSimulator(Simulator):
     def _step(self, dt, applied_forces):
         self.scene.set_external_forces(applied_forces)
-        # FEM internal force assembly and explicit integration are intentionally
-        # left as the lab exercise hook.
+        self.scene.calc_grad()
+        self.scene.svd()
+        self.model.apply()
+        self.scene.calc_PK_stress()
+        self.scene.calc_internal_forces()
+        self.scene.time_integral(dt)
 
 
 def build_simulator(sim_cfg, scene: Scene):

@@ -12,10 +12,9 @@ from simulator import build_simulator
 def main(cfg):
     scene_cfg = OmegaConf.to_container(cfg.scene, resolve=True)
     sim_cfg = OmegaConf.to_container(cfg.sim, resolve=True)
-    sim_cfg["video"] = bool(cfg.video)
+    sim_cfg["video"] = cfg.video
 
     scene = Scene(scene_cfg)
-    # exit()
     simulator = build_simulator(sim_cfg, scene)
     simulator.run()
 
