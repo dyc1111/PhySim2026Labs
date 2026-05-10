@@ -2,7 +2,7 @@ type: cuboid
 gravity: [0.0, -0.05, 0.0]
 origin: [-4.0, 1.0, -1.0]
 size: [8.0, 2.0, 2.0]
-resolution: [12, 3, 3]
+resolution: [40, 10, 10]
 density: 400.0
 young: 20000.0
 poisson: 0.2

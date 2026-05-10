@@ -59,6 +59,6 @@ class InteractionHandler:
 
             dx = mouse_pos[0] - self.original_mouse_pos[0]
             dy = mouse_pos[1] - self.original_mouse_pos[1]
-            applied_forces[self.selected_vertex] = (dx * right + dy * up) * 200
+            applied_forces[self.selected_vertex] = (dx * right + dy * up) * 2000
 
         return applied_forces

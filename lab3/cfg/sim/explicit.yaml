@@ -1,5 +1,5 @@
 type: explicit
-dt: 0.001
+dt: 0.01
 substeps: 1
 steps: -1
-model: StVK
+model: Corotated

@@ -73,12 +73,24 @@ class Scene:
             zmin, zmax = float(np.min(rest[:, 2])), float(np.max(rest[:, 2]))
             pinned[
                 (
-                    (np.abs(rest[:, 2] - zmin) <= 1e-8)
-                    | (np.abs(rest[:, 2] - zmax) <= 1e-8)
+                    (
+                        (np.abs(rest[:, 2] - zmin) <= 0.2)
+                        | (np.abs(rest[:, 2] - zmax) <= 0.2)
+                    )
+                    & (
+                        (np.abs(rest[:, 0] - xmin) <= 1e-8)
+                        | (np.abs(rest[:, 0] - xmax) <= 1e-8)
+                    )
                 )
-                & (
-                    (np.abs(rest[:, 0] - xmin) <= 1e-8)
-                    | (np.abs(rest[:, 0] - xmax) <= 1e-8)
+                | (
+                    (
+                        (np.abs(rest[:, 2] - zmin) <= 1e-8)
+                        | (np.abs(rest[:, 2] - zmax) <= 1e-8)
+                    )
+                    & (
+                        (np.abs(rest[:, 0] - xmin) <= 0.2)
+                        | (np.abs(rest[:, 0] - xmax) <= 0.2)
+                    )
                 )
             ] = 1
         elif pin_rule == "left_corners" and self.element_dim == 2:
@@ -87,10 +99,10 @@ class Scene:
             zmin, zmax = float(np.min(rest[:, 2])), float(np.max(rest[:, 2]))
             pinned[
                 (
-                    (np.abs(rest[:, 2] - zmin) <= 1e-8)
-                    | (np.abs(rest[:, 2] - zmax) <= 1e-8)
+                    (np.abs(rest[:, 2] - zmin) <= 0.2)
+                    | (np.abs(rest[:, 2] - zmax) <= 0.2)
                 )
-                & (np.abs(rest[:, 0] - xmin) <= 1e-8)
+                & (np.abs(rest[:, 0] - xmin) <= 0.2)
             ] = 1
 
         self.pinned.from_numpy(pinned)
@@ -180,5 +192,6 @@ class Scene:
     @ti.kernel
     def time_integral(self, dt: ti.f32):  # type: ignore
         for i in range(self.num_vertices):
-            self.vel[i] += self.force[i] * dt / self.mass[i]
-            self.pos[i] += self.vel[i] * dt
+            if self.pinned[i] == 0:
+                self.vel[i] += self.force[i] * dt / self.mass[i]
+                self.pos[i] += self.vel[i] * dt
