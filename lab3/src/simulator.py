@@ -21,7 +21,7 @@ class Simulator(ABC):
         self.paused = False
         self._space_was_down = False
         self._f_was_down = False
-        self.interaction_handler = InteractionHandler(scene)
+        self.interaction_handler = InteractionHandler(scene, sim_cfg["interaction"])
         self.video_manager = ti.tools.VideoManager(
             output_dir="./", framerate=30, automatic_build=False
         )

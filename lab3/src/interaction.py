@@ -5,10 +5,11 @@ from util import get_camera_ray_dir
 
 
 class InteractionHandler:
-    def __init__(self, scene: Scene):
+    def __init__(self, scene: Scene, cfg):
         self.scene = scene
         self.selected_vertex = -1
         self.original_mouse_pos = None
+        self.magnitude = cfg["magnitude"]
 
     def _pick_nearest_vertex(self, mouse_pos, camera):
         cam_pos = np.asarray(camera.curr_position, dtype=np.float32)
@@ -59,6 +60,8 @@ class InteractionHandler:
 
             dx = mouse_pos[0] - self.original_mouse_pos[0]
             dy = mouse_pos[1] - self.original_mouse_pos[1]
-            applied_forces[self.selected_vertex] = (dx * right + dy * up) * 2000
+            applied_forces[self.selected_vertex] = (
+                dx * right + dy * up
+            ) * self.magnitude
 
         return applied_forces

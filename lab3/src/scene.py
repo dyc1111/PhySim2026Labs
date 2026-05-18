@@ -102,7 +102,7 @@ class Scene:
                     (np.abs(rest[:, 2] - zmin) <= 0.2)
                     | (np.abs(rest[:, 2] - zmax) <= 0.2)
                 )
-                & (np.abs(rest[:, 0] - xmin) <= 0.2)
+                & (np.abs(rest[:, 0] - xmin) <= 1e-8)
             ] = 1
 
         self.pinned.from_numpy(pinned)
